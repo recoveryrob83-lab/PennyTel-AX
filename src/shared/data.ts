@@ -59,10 +59,11 @@ export function validateRecord(table: Table, value: unknown): asserts value is E
       if (
         !nonnegative(v) ||
         (field.integer && !Number.isSafeInteger(v)) ||
+        (field.min !== undefined && (v as number) < field.min) ||
         (field.max !== undefined && (v as number) > field.max)
       )
         fail(
-          `${prefix}: ${field.label} must be a nonnegative ${field.integer ? 'whole ' : ''}number${field.max !== undefined ? ` no greater than ${field.max}` : ''}.`
+          `${prefix}: ${field.label} must be a nonnegative ${field.integer ? 'whole ' : ''}number${field.min !== undefined ? ` at least ${field.min}` : ''}${field.max !== undefined ? ` no greater than ${field.max}` : ''}.`
         )
     } else if (field.type === 'boolean') {
       if (typeof v !== 'boolean') fail(`${prefix}: ${field.label} must be true or false.`)
@@ -86,12 +87,6 @@ export function validateRecord(table: Table, value: unknown): asserts value is E
     if (run.startAt && run.endAt && Date.parse(run.endAt) < Date.parse(run.startAt))
       fail(`${prefix}: end timestamp precedes start.`)
     if (
-      run.cachedInputTokens !== undefined &&
-      run.inputTokens !== undefined &&
-      run.cachedInputTokens > run.inputTokens
-    )
-      fail(`${prefix}: cached input exceeds total input tokens.`)
-    if (
       run.reasoningTokens !== undefined &&
       run.outputTokens !== undefined &&
       run.reasoningTokens > run.outputTokens
@@ -112,6 +107,7 @@ export function validateRecord(table: Table, value: unknown): asserts value is E
               'effectiveDate',
               'pricingId',
               'source',
+              'rateSource',
               'inputRate',
               'cachedRate',
               'outputRate'
@@ -124,7 +120,11 @@ export function validateRecord(table: Table, value: unknown): asserts value is E
         typeof p.provider !== 'string' ||
         p.model !== (run.model ?? '') ||
         p.provider !== (run.provider ?? '') ||
-        (p.pricingId !== undefined && typeof p.pricingId !== 'string')
+        (p.pricingId !== undefined && typeof p.pricingId !== 'string') ||
+        (p.rateSource !== undefined &&
+          (typeof p.rateSource !== 'string' ||
+            !p.rateSource.trim() ||
+            p.rateSource.length > 100_000))
       )
         fail(`${prefix}: invalid or mismatched pricing snapshot.`)
       if (
@@ -233,7 +233,8 @@ export function snapshotRun(run: Run, data: Dataset, previous?: Run): Run {
   } else {
     const price = applicablePrice(run, data.pricing)
     if (price) {
-      const { id, model, provider, effectiveDate, inputRate, cachedRate, outputRate } = price
+      const { id, model, provider, effectiveDate, inputRate, cachedRate, outputRate, source } =
+        price
       next.priceSnapshot = {
         pricingId: id,
         model,
@@ -242,7 +243,8 @@ export function snapshotRun(run: Run, data: Dataset, previous?: Run): Run {
         inputRate,
         cachedRate,
         outputRate,
-        source: 'Catalog'
+        source: 'Catalog',
+        ...(source ? { rateSource: source } : {})
       } satisfies PriceSnapshot
     }
   }
@@ -268,6 +270,10 @@ export function mergeImport(
   } catch {
     fail('Invalid JSON. Paste or select a PennyTel dataset export.')
   }
+  if (object(input) && input.kind === 'pennytel-comparison')
+    fail(
+      'Comparison exports are derived analysis, not importable telemetry. Select an Export dataset JSON file instead.'
+    )
   if (!object(input) || input.schemaVersion !== 1) fail('Import requires schemaVersion: 1.')
   const incoming = { ...emptyDataset(), ...input, revision: 0 }
   // Check each record first, then relationships against the combined dataset.

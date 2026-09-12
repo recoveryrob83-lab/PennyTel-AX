@@ -4,6 +4,8 @@ import { readFile, stat, writeFile } from 'node:fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { TelemetryStore } from './store'
 import type { Mutation } from '../shared/types'
+import { comparisonExport, validateComparisonRequest } from '../shared/comparison'
+import { version as appVersion } from '../../package.json'
 
 // A dedicated directory keeps local QA separate from the operator's dataset.
 if (process.env.PENNYTEL_DATA_DIR) app.setPath('userData', resolve(process.env.PENNYTEL_DATA_DIR))
@@ -59,9 +61,31 @@ else {
     })
     handle('telemetry:export', async () => {
       const { data } = await store.load()
+      return saveExport(
+        'Export PennyTel dataset',
+        `pennytel-${new Date().toISOString().slice(0, 10)}.json`,
+        data
+      )
+    })
+    handle('telemetry:export-comparison', async (request) => {
+      validateComparisonRequest(request)
+      const { data } = await store.load()
+      // Bundle package metadata: direct entry-file launches otherwise report Electron's 0.0.
+      const analysis = comparisonExport(data, request, appVersion, new Date().toISOString())
+      return saveExport(
+        'Export PennyTel comparison (analysis only)',
+        `pennytel-comparison-${new Date().toISOString().slice(0, 10)}.json`,
+        analysis
+      )
+    })
+    async function saveExport(
+      title: string,
+      defaultPath: string,
+      contents: unknown
+    ): Promise<string | null> {
       const result = await dialog.showSaveDialog(mainWindow, {
-        title: 'Export PennyTel dataset',
-        defaultPath: `pennytel-${new Date().toISOString().slice(0, 10)}.json`,
+        title,
+        defaultPath,
         filters: [{ name: 'JSON', extensions: ['json'] }]
       })
       if (result.canceled || !result.filePath) return null
@@ -70,12 +94,12 @@ else {
         resolve(result.filePath) === join(app.getPath('userData'), 'telemetry.backup.json')
       )
         throw new Error('Choose a path outside the live dataset and its backup.')
-      await writeFile(result.filePath, JSON.stringify(data, null, 2), {
+      await writeFile(result.filePath, JSON.stringify(contents, null, 2), {
         encoding: 'utf8',
         mode: 0o600
       })
       return result.filePath
-    })
+    }
     mainWindow.on('ready-to-show', () => mainWindow.show())
     mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     mainWindow.webContents.on('will-navigate', (event) => event.preventDefault())

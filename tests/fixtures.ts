@@ -44,3 +44,141 @@ export function fixture(): Dataset {
   data.runs = [snapshotRun(runFixture(), data)]
   return data
 }
+
+export function comparisonFixture(): Dataset {
+  const data = fixture()
+  data.slices = [
+    {
+      ...data.slices[0],
+      id: 'mixed',
+      title: 'Mixed-model accepted slice',
+      qualityGrade: 5,
+      project: 'QA'
+    },
+    {
+      ...data.slices[0],
+      id: 'luna-only',
+      title: 'Luna-only accepted slice',
+      qualityGrade: 3,
+      project: 'QA'
+    },
+    {
+      ...data.slices[0],
+      id: 'cross-role',
+      title: 'Different runs match different filters',
+      project: 'QA'
+    },
+    { ...data.slices[0], id: 'empty', title: 'Accepted with missing run telemetry', project: 'QA' }
+  ]
+  const priced = (overrides: Partial<Run>): Run =>
+    snapshotRun(
+      runFixture({
+        inputTokens: 1_000_000,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        inputRate: 1,
+        cachedRate: 0.1,
+        outputRate: 2,
+        ...overrides
+      }),
+      data
+    )
+  data.runs = [
+    priced({
+      id: 'astra-impl',
+      sliceId: 'mixed',
+      model: 'QA Astra',
+      role: 'Implementer',
+      usageBefore: 94,
+      usageAfter: 92
+    }),
+    priced({
+      id: 'luna-critic',
+      sliceId: 'mixed',
+      model: 'QA Luna',
+      role: 'Critic',
+      inputTokens: 2_000_000
+    }),
+    priced({
+      id: 'luna-repair',
+      sliceId: 'mixed',
+      model: 'QA Luna',
+      role: 'Repair',
+      inputTokens: 3_000_000
+    }),
+    priced({
+      id: 'after-acceptance',
+      sliceId: 'mixed',
+      model: 'QA Luna',
+      role: 'Critic',
+      inputTokens: 50_000_000,
+      startAt: '2026-09-12T10:00:00-05:00',
+      endAt: '2026-09-12T10:30:00-05:00'
+    }),
+    priced({
+      id: 'luna-only-run',
+      sliceId: 'luna-only',
+      model: 'QA Luna',
+      role: 'Implementer',
+      inputTokens: 7_000_000
+    }),
+    priced({ id: 'cross-astra', sliceId: 'cross-role', model: 'QA Astra', role: 'Critic' }),
+    priced({ id: 'cross-luna', sliceId: 'cross-role', model: 'QA Luna', role: 'Implementer' })
+  ]
+  data.findings = [
+    {
+      id: 'product',
+      sliceId: 'mixed',
+      runId: 'luna-critic',
+      severity: 'P1',
+      category: 'Product',
+      title: 'Product issue',
+      description: 'Synthetic finding',
+      contractInvariant: 'State must persist',
+      impact: 'User edit lost',
+      confidence: 'High: reproduced',
+      notes: 'Independent review',
+      evidence: 'Test evidence',
+      status: 'Repaired'
+    },
+    {
+      id: 'harness',
+      sliceId: 'mixed',
+      runId: 'luna-critic',
+      severity: 'P1',
+      category: 'Harness',
+      description: 'Synthetic harness finding'
+    },
+    {
+      id: 'observation',
+      sliceId: 'mixed',
+      runId: 'luna-critic',
+      severity: 'Observation',
+      category: 'Other',
+      description: 'Synthetic observation'
+    },
+    {
+      id: 'dismissed',
+      sliceId: 'mixed',
+      runId: 'luna-critic',
+      severity: 'P0',
+      category: 'UX',
+      description: 'Synthetic dismissed finding',
+      status: 'Dismissed'
+    }
+  ]
+  data.discoveries = [
+    {
+      id: 'discovery',
+      sliceId: 'mixed',
+      runId: 'astra-impl',
+      description: 'Synthetic independently confirmed insight',
+      inPrompt: false,
+      selfInitiated: true,
+      validation: 'Yes',
+      adopted: 'Deferred'
+    }
+  ]
+  return data
+}

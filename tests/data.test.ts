@@ -7,6 +7,58 @@ import { runCost } from '../src/shared/metrics'
 const save = (data: Dataset, table: Table, record: Entity): Dataset =>
   applyMutation(data, { kind: 'save', table, record, revision: data.revision })
 describe('validated transactions and imports', () => {
+  it.each([0, 6, 1.5, 'A', '5'])(
+    'rejects a quality grade outside the numeric 1–5 contract: %j',
+    (qualityGrade) => {
+      expect(() => validateRecord('slices', { id: 's', title: 'QA', qualityGrade })).toThrow()
+    }
+  )
+  it('round-trips reconciled Sheet evidence, adoption, quality, and historical pricing provenance', () => {
+    const data = fixture()
+    data.slices[0].qualityGrade = 4
+    data.pricing[0].source = 'QA provider pricing source'
+    data.runs = [
+      runFixture({
+        inputTokens: 138_187,
+        cachedInputTokens: 2_902_400,
+        outputTokens: 69_046,
+        reasoningTokens: 11_505
+      })
+    ]
+    data.findings = [
+      {
+        id: 'finding',
+        sliceId: 'slice-test',
+        title: 'QA title',
+        description: 'QA description',
+        severity: 'P1',
+        category: 'Product',
+        contractInvariant: 'Must persist',
+        impact: 'Lost edits',
+        confidence: 'Reproduced twice',
+        notes: 'Reviewer notes',
+        evidence: 'QA evidence'
+      }
+    ]
+    data.discoveries = [
+      { id: 'discovery', sliceId: 'slice-test', description: 'QA insight', adopted: 'Deferred' }
+    ]
+    const imported = mergeImport(emptyDataset(), JSON.stringify(data)).data
+    expect(imported.findings).toEqual(data.findings)
+    expect(imported.discoveries[0].adopted).toBe('Deferred')
+    expect(imported.slices[0].qualityGrade).toBe(4)
+    expect(imported.runs[0].priceSnapshot?.rateSource).toBe('QA provider pricing source')
+    expect(runCost(imported.runs[0])).toBeCloseTo(2.418034)
+    const changed = save(imported, 'pricing', {
+      ...imported.pricing[0],
+      source: 'New source',
+      inputRate: 999
+    })
+    expect(changed.runs[0].priceSnapshot?.rateSource).toBe('QA provider pricing source')
+    expect(mergeImport(emptyDataset(), JSON.stringify(changed)).data.runs[0].priceSnapshot).toEqual(
+      changed.runs[0].priceSnapshot
+    )
+  })
   it('supports undated override costs without inventing an effective date', () => {
     const data = fixture()
     const saved = save(data, 'runs', {
@@ -30,9 +82,9 @@ describe('validated transactions and imports', () => {
     const data = fixture()
     const changed = save(data, 'pricing', { ...data.pricing[0], inputRate: 999 })
     expect(data.pricing[0].inputRate).toBe(2)
-    expect(runCost(changed.runs[0])).toBeCloseTo(0.34)
+    expect(runCost(changed.runs[0])).toBeCloseTo(0.42)
     const edited = save(changed, 'runs', { ...changed.runs[0], notes: 'Corrected note' })
-    expect(runCost(edited.runs[0])).toBeCloseTo(0.34)
+    expect(runCost(edited.runs[0])).toBeCloseTo(0.42)
     const overridden = save(edited, 'runs', {
       ...edited.runs[0],
       inputRate: 0,
@@ -52,7 +104,9 @@ describe('validated transactions and imports', () => {
   })
   it.each([
     [{ inputTokens: -1 }, 'nonnegative'],
-    [{ cachedInputTokens: 100_001 }, 'cached input exceeds'],
+    [{ cachedInputTokens: -1 }, 'nonnegative'],
+    [{ usageBefore: 101 }, 'no greater than'],
+    [{ usageAfter: 101 }, 'no greater than'],
     [{ reasoningTokens: 20_001 }, 'reasoning tokens exceed'],
     [{ testsPassed: 1.5 }, 'whole'],
     [{ outputTokens: Infinity }, 'nonnegative'],
@@ -124,7 +178,7 @@ describe('validated transactions and imports', () => {
       revision: 0
     })
     expect(data.pricing).toHaveLength(0)
-    expect(runCost(data.runs[0])).toBeCloseTo(0.34)
+    expect(runCost(data.runs[0])).toBeCloseTo(0.42)
   })
   it('rejects duplicate effective prices and malformed snapshots', () => {
     const data = fixture()

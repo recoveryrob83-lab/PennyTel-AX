@@ -123,7 +123,7 @@ export function RecordEditor({
             {...common}
             readOnly={field.key === 'id' && !!record}
             type={field.type === 'number' ? 'number' : field.type === 'date' ? 'date' : 'text'}
-            min={field.type === 'number' ? 0 : undefined}
+            min={field.type === 'number' ? (field.min ?? 0) : undefined}
             max={field.max}
             step={field.type === 'number' ? (field.integer ? 1 : 'any') : undefined}
             placeholder={field.type === 'timestamp' ? '2026-09-11T15:00:00-05:00' : undefined}

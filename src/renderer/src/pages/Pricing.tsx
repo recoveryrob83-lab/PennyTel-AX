@@ -1,5 +1,6 @@
 import type { Dataset, Pricing as Price } from '../../../shared/types'
 import { money } from '../../../shared/metrics'
+import { displayDate } from '../../../shared/presentation'
 import { Empty } from '../components/ui'
 
 export function Pricing({
@@ -74,9 +75,12 @@ export function Pricing({
                       <td>
                         <strong>{p.model}</strong>
                         <small>{p.provider}</small>
+                        {p.source && <small className="preserve">Source: {p.source}</small>}
                         {p.notes && <small className="preserve">{p.notes}</small>}
                       </td>
-                      <td>{p.effectiveDate}</td>
+                      <td>
+                        <time dateTime={p.effectiveDate}>{displayDate(p.effectiveDate)}</time>
+                      </td>
                       <td>{money(p.inputRate)}</td>
                       <td>{money(p.cachedRate)}</td>
                       <td>{money(p.outputRate)}</td>
@@ -99,16 +103,18 @@ export function Pricing({
       <section className="panel prose">
         <h2>How run cost is calculated</h2>
         <code>
-          ((input − cached) × input rate + cached × cached rate + output × output rate) / 1,000,000
+          (fresh input × input rate + cached input × cached rate + output × output rate) / 1,000,000
         </code>
         <p>
-          Input tokens include cached input. Output tokens include reasoning tokens, so reasoning is
-          never added a second time. All three token counts and a saved price are needed for a
-          complete cost. Zero is a value; blank is unknown.
+          Input tokens are fresh / noncached input. Cached input is additional. Output tokens
+          include reasoning tokens, so reasoning is never added a second time. All three token
+          counts and a saved price are needed for a complete cost. Zero is a value; blank is
+          unknown.
         </p>
         <p>
           Subscription meter burn is a separate measure and is never presented as dollars. Use a
-          consistent consumed-meter scale, or supply an explicit burn when the meter resets.
+          remaining-percentage meter: 94% before → 92% after means 2 percentage points burned. Mark
+          resets between readings; only an explicit measured burn is used across a reset.
         </p>
       </section>
     </>

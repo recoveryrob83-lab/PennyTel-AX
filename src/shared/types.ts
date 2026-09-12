@@ -1,3 +1,5 @@
+import type { ComparisonRequest } from './comparison'
+
 export type Level = 'Low' | 'Medium' | 'High'
 export type Thinking = Level | 'ExtraHigh' | 'Max'
 export type Role = 'Orchestrator' | 'Context Steward' | 'Implementer' | 'Critic' | 'Repair'
@@ -18,7 +20,7 @@ export interface Slice {
   startDate?: string
   acceptedAt?: string
   disposition?: 'In progress' | 'Accepted' | 'Rejected' | 'Abandoned'
-  qualityGrade?: string
+  qualityGrade?: 1 | 2 | 3 | 4 | 5
   preferredCandidate?: string
   timeToAcceptedMinutes?: number
   notes?: string
@@ -34,6 +36,7 @@ export interface PriceSnapshot extends Rates {
   effectiveDate?: string
   pricingId?: string
   source: 'Catalog' | 'Override'
+  rateSource?: string
 }
 export interface Run {
   id: string
@@ -62,6 +65,7 @@ export interface Run {
   usageBefore?: number
   usageAfter?: number
   usageBurn?: number
+  usageReset?: boolean
   inputRate?: number
   cachedRate?: number
   outputRate?: number
@@ -100,7 +104,12 @@ export interface Finding {
     | 'Environment'
     | 'Scope'
     | 'Other'
+  title?: string
   description: string
+  contractInvariant?: string
+  impact?: string
+  confidence?: string
+  notes?: string
   userVisible?: boolean
   reproducible?: boolean
   repairRequired?: boolean
@@ -121,7 +130,7 @@ export interface Discovery {
   impact?: Level
   validation?: 'Pending' | 'Yes' | 'No'
   validatedBy?: string
-  adopted?: boolean
+  adopted?: 'Yes' | 'No' | 'Deferred'
   disposition?: string
   downstreamValue?:
     | 'Prevented Defect'
@@ -138,6 +147,7 @@ export interface Pricing extends Rates {
   model: string
   provider: string
   effectiveDate: string
+  source?: string
   notes?: string
 }
 export interface EntityMap {
@@ -179,4 +189,5 @@ export interface PennyTelAPI {
   previewImport: (text: string) => Promise<ImportPreview>
   openImport: () => Promise<string | null>
   exportData: () => Promise<string | null>
+  exportComparison: (request: ComparisonRequest) => Promise<string | null>
 }

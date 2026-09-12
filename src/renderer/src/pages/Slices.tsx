@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { burnLabel, displayTimestamp, qualityLabel } from '../../../shared/presentation'
 import type { Dataset, Entity, Run, Slice, Table } from '../../../shared/types'
 import {
   acceptanceRuns,
@@ -127,7 +128,9 @@ export function Slices({
                 </div>
                 <div className="card-bottom">
                   <span>{s.ambiguity ? `${s.ambiguity} ambiguity` : 'Ambiguity unknown'}</span>
-                  <span>{s.qualityGrade ? `Quality ${s.qualityGrade}` : 'Ungraded'} →</span>
+                  <span>
+                    {s.qualityGrade ? `Quality ${qualityLabel(s.qualityGrade)}` : 'Ungraded'} →
+                  </span>
                 </div>
               </button>
             )
@@ -172,6 +175,12 @@ function SliceDetail({
             <span>{slice.productionModel ?? 'Workflow unknown'}</span>
             <span>{slice.ambiguity ?? 'Unknown'} ambiguity</span>
             <span>{slice.risk ?? 'Unknown'} risk</span>
+            {slice.acceptedAt && (
+              <span>
+                Accepted{' '}
+                <time dateTime={slice.acceptedAt}>{displayTimestamp(slice.acceptedAt)}</time>
+              </span>
+            )}
           </div>
         </div>
         <button onClick={() => onEdit('slices', slice)}>Edit slice</button>
@@ -198,7 +207,7 @@ function SliceDetail({
         />
         <Metric
           label="Product quality"
-          value={slice.qualityGrade ?? 'Ungraded'}
+          value={qualityLabel(slice.qualityGrade)}
           detail={
             slice.preferredCandidate
               ? `Preferred: ${slice.preferredCandidate}`
@@ -220,7 +229,7 @@ function SliceDetail({
           </small>
         </span>
         <span>
-          Meter burn <strong>{summary.burnKnown ? summary.burn : 'Unknown'}</strong>{' '}
+          Meter burn <strong>{burnLabel(summary.burnKnown ? summary.burn : null)}</strong>{' '}
           <small>
             {summary.burnKnown}/{summary.total} runs
           </small>
@@ -303,7 +312,8 @@ function SliceDetail({
                     </div>
                     <button onClick={() => onEdit('findings', f)}>Edit finding</button>
                   </div>
-                  <h3>{f.description}</h3>
+                  <h3>{f.title ?? f.description}</h3>
+                  {f.title && <p className="preserve">{f.description}</p>}
                   <p className="muted">
                     User visible:{' '}
                     {f.userVisible === undefined ? 'Unknown' : f.userVisible ? 'Yes' : 'No'} ·

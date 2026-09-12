@@ -10,7 +10,8 @@ import {
   timeToAccepted,
   usageBurn,
   validatedDiscovery,
-  roleSummary
+  roleSummary,
+  cacheRatio
 } from '../src/shared/metrics'
 import { snapshotRun } from '../src/shared/data'
 import { fixture, runFixture } from './fixtures'
@@ -26,8 +27,8 @@ describe('deterministic telemetry calculations', () => {
     expect(roleSummary([], 'Repair')).toEqual({ cost: 0, priced: 0, total: 0 })
   })
   it('charges cached input separately and never double bills reasoning', () => {
-    expect(runCost(fixture().runs[0])).toBeCloseTo(0.34, 10)
-    expect(runCost({ ...fixture().runs[0], reasoningTokens: 0 })).toBeCloseTo(0.34, 10)
+    expect(runCost(fixture().runs[0])).toBeCloseTo(0.42, 10)
+    expect(runCost({ ...fixture().runs[0], reasoningTokens: 0 })).toBeCloseTo(0.42, 10)
   })
   it('distinguishes missing tokens and missing rates from explicit zero', () => {
     const run = fixture().runs[0]
@@ -89,15 +90,36 @@ describe('deterministic telemetry calculations', () => {
     ])
     expect(stats.priced).toBe(2)
     expect(stats.total).toBe(3)
-    expect(stats.cost).toBeCloseTo(2.34)
+    expect(stats.cost).toBeCloseTo(2.42)
     expect(stats.repairCost).toBe(2)
-    expect(stats.cacheRatio).toBe(0.04)
+    expect(stats.cacheRatio).toBeCloseTo(40_000 / 1_040_000)
     expect(stats.repairRuns).toBe(1)
   })
   it('treats meter resets as unknown unless explicit burn is supplied', () => {
-    expect(usageBurn(runFixture({ usageBefore: 10, usageAfter: 14 }))).toBe(4)
-    expect(usageBurn(runFixture({ usageBefore: 80, usageAfter: 5 }))).toBeNull()
-    expect(usageBurn(runFixture({ usageBefore: 80, usageAfter: 5, usageBurn: 3 }))).toBe(3)
+    expect(usageBurn(runFixture({ usageBefore: 94, usageAfter: 92 }))).toBe(2)
+    expect(usageBurn(runFixture({ usageBefore: 0, usageAfter: 0 }))).toBe(0)
+    expect(usageBurn(runFixture({ usageBefore: 5, usageAfter: 80 }))).toBeNull()
+    expect(usageBurn(runFixture({ usageBefore: 94, usageAfter: 92, usageReset: true }))).toBeNull()
+    expect(
+      usageBurn(runFixture({ usageBefore: 94, usageAfter: 92, usageReset: true, usageBurn: 3 }))
+    ).toBe(3)
+    expect(usageBurn(runFixture({ usageBefore: 94, usageAfter: undefined }))).toBeNull()
+  })
+  it('accepts real-shaped Codex telemetry and computes fresh plus cached costs', () => {
+    const run = snapshotRun(
+      runFixture({
+        inputTokens: 138_187,
+        cachedInputTokens: 2_902_400,
+        outputTokens: 69_046,
+        reasoningTokens: 11_505
+      }),
+      fixture()
+    )
+    expect(runCost(run)).toBeCloseTo(2.418034, 10)
+    expect(cacheRatio(run)).toBeCloseTo(2_902_400 / 3_040_587, 10)
+    expect(cacheRatio({ ...run, inputTokens: 0 })).toBe(1)
+    expect(cacheRatio({ ...run, inputTokens: 0, cachedInputTokens: 0 })).toBeNull()
+    expect(cacheRatio({ ...run, inputTokens: undefined })).toBeNull()
   })
   it('requires all three predicates for validated autonomous credit', () => {
     const discovery: Discovery = {

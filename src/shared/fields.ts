@@ -7,6 +7,7 @@ export interface Field {
   options?: readonly string[]
   required?: boolean
   integer?: boolean
+  min?: number
   max?: number
   hint?: string
   group?: string
@@ -55,8 +56,13 @@ export const fields: Record<Table, Field[]> = {
     },
     {
       key: 'qualityGrade',
-      label: 'Product quality grade',
-      hint: 'Operator-defined grade; retain a consistent rubric.'
+      label: 'Product quality grade (1–5)',
+      type: 'number',
+      integer: true,
+      min: 1,
+      max: 5,
+      options: ['1', '2', '3', '4', '5'],
+      hint: 'Final operator judgment on the Sheet’s 1–5 scale, separate from automated metrics.'
     },
     { key: 'preferredCandidate', label: 'Preferred candidate / model' },
     { key: 'startDate', label: 'Start date', type: 'date' },
@@ -155,38 +161,51 @@ export const fields: Record<Table, Field[]> = {
       options: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
       group: 'Time & usage'
     },
-    number(
-      'usageBefore',
-      'Usage meter before',
-      'Time & usage',
-      'Consumed meter units, increasing with usage.',
-      false
-    ),
-    number(
-      'usageAfter',
-      'Usage meter after',
-      'Time & usage',
-      'Use a consistent scale; after minus before is burn.',
-      false
-    ),
+    {
+      ...number(
+        'usageBefore',
+        'Usage before (% remaining)',
+        'Time & usage',
+        'Remaining percentage, 0–100. Use comparable readings from the same meter.',
+        false
+      ),
+      max: 100
+    },
+    {
+      ...number(
+        'usageAfter',
+        'Usage after (% remaining)',
+        'Time & usage',
+        '94% before → 92% after = 2 percentage points burned. An increase is treated as a reset, not negative burn.',
+        false
+      ),
+      max: 100
+    },
+    {
+      key: 'usageReset',
+      label: 'Meter reset / replenished between readings',
+      type: 'boolean',
+      group: 'Time & usage',
+      hint: 'Yes disables inferred burn, even if the ending percentage is lower. Explicit burn remains authoritative.'
+    },
     number(
       'usageBurn',
-      'Usage meter burn',
+      'Usage meter burn (percentage points)',
       'Time & usage',
-      'Explicit burn overrides meter difference; useful across a reset.',
+      'Explicit measured burn overrides before minus after. Leave blank if unknown across a reset.',
       false
     ),
     number(
       'inputTokens',
-      'Input tokens (including cached)',
+      'Input tokens (fresh / noncached)',
       'Tokens & cost',
-      'Total input tokens. Cached tokens are a subset, not additional input.'
+      'Codex input tokens are fresh input. Cached input is additional and recorded separately.'
     ),
     number(
       'cachedInputTokens',
       'Cached input tokens',
       'Tokens & cost',
-      'Enter 0 when known to be uncached. Blank means unknown.'
+      'Additional cached input; may exceed fresh input. Enter 0 when known to be uncached. Blank means unknown.'
     ),
     number('outputTokens', 'Output tokens (including reasoning)', 'Tokens & cost'),
     number(
@@ -262,7 +281,8 @@ export const fields: Record<Table, Field[]> = {
         'Other'
       ]
     },
-    { key: 'description', label: 'Short description', type: 'textarea', required: true },
+    { key: 'title', label: 'Finding title' },
+    { key: 'description', label: 'Description', type: 'textarea', required: true },
     { key: 'userVisible', label: 'User visible', type: 'boolean' },
     { key: 'reproducible', label: 'Reproducible', type: 'boolean' },
     { key: 'repairRequired', label: 'Repair required', type: 'boolean' },
@@ -272,7 +292,21 @@ export const fields: Record<Table, Field[]> = {
       label: 'Final status',
       options: ['Open', 'Repaired', 'Accepted risk', 'Dismissed']
     },
-    { key: 'evidence', label: 'Evidence / notes', type: 'textarea' }
+    { key: 'evidence', label: 'Evidence', type: 'textarea' },
+    {
+      key: 'contractInvariant',
+      label: 'Contract / invariant',
+      type: 'textarea',
+      group: 'Review judgment'
+    },
+    { key: 'impact', label: 'Impact', type: 'textarea', group: 'Review judgment' },
+    {
+      key: 'confidence',
+      label: 'Confidence',
+      group: 'Review judgment',
+      hint: 'Reviewer’s confidence and rationale; the Sheet specifies no fixed scale.'
+    },
+    notes
   ],
   discoveries: [
     id,
@@ -291,7 +325,7 @@ export const fields: Record<Table, Field[]> = {
     { key: 'impact', label: 'Impact level', options: levels },
     { key: 'validation', label: 'Independent validation', options: ['Pending', 'Yes', 'No'] },
     { key: 'validatedBy', label: 'Validated by' },
-    { key: 'adopted', label: 'Adopted', type: 'boolean' },
+    { key: 'adopted', label: 'Adopted', options: ['Yes', 'No', 'Deferred'] },
     { key: 'disposition', label: 'Disposition' },
     {
       key: 'downstreamValue',
@@ -319,7 +353,12 @@ export const fields: Record<Table, Field[]> = {
       required: true
     },
     { ...number('outputRate', 'Output $ / million', 'Rates', undefined, false), required: true },
-    { ...notes, label: 'Notes / pricing source' }
+    {
+      key: 'source',
+      label: 'Pricing source',
+      hint: 'Provider source or link; retained with new catalog snapshots.'
+    },
+    notes
   ]
 }
 export const singular: Record<Table, string> = {

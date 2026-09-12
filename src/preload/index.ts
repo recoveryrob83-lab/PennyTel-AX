@@ -6,6 +6,7 @@ const api: PennyTelAPI = {
   mutate: (command) => ipcRenderer.invoke('telemetry:mutate', command),
   previewImport: (text) => ipcRenderer.invoke('telemetry:preview', text),
   openImport: () => ipcRenderer.invoke('telemetry:open'),
-  exportData: () => ipcRenderer.invoke('telemetry:export')
+  exportData: () => ipcRenderer.invoke('telemetry:export'),
+  exportComparison: (request) => ipcRenderer.invoke('telemetry:export-comparison', request)
 }
 contextBridge.exposeInMainWorld('pennytel', api)

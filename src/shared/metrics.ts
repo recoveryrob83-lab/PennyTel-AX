@@ -36,7 +36,7 @@ export function runCost(run: Run): number | null {
   if (costIssues(run).length) return null
   const rates = run.priceSnapshot!
   return (
-    ((run.inputTokens! - run.cachedInputTokens!) * rates.inputRate +
+    (run.inputTokens! * rates.inputRate +
       run.cachedInputTokens! * rates.cachedRate +
       run.outputTokens! * rates.outputRate) /
     1_000_000
@@ -63,12 +63,18 @@ export function roleSummary(
 export function usageBurn(run: Run): number | null {
   if (run.usageBurn !== undefined) return run.usageBurn
   if (
+    run.usageReset === true ||
     run.usageBefore === undefined ||
     run.usageAfter === undefined ||
-    run.usageAfter < run.usageBefore
+    run.usageAfter > run.usageBefore
   )
     return null
-  return run.usageAfter - run.usageBefore
+  return run.usageBefore - run.usageAfter
+}
+export function cacheRatio(run: Run): number | null {
+  if (run.inputTokens === undefined || run.cachedInputTokens === undefined) return null
+  const total = run.inputTokens + run.cachedInputTokens
+  return total > 0 ? run.cachedInputTokens / total : null
 }
 export function validatedDiscovery(discovery: Discovery): boolean {
   return (
@@ -139,7 +145,7 @@ export function summarize(runs: Run[]): {
     criticCost,
     implementationCost,
     repairRuns: runs.filter((r) => r.role === 'Repair').length,
-    cacheRatio: input > 0 ? cached / input : null,
+    cacheRatio: input + cached > 0 ? cached / (input + cached) : null,
     cacheKnown,
     burn,
     burnKnown

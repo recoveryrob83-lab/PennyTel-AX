@@ -1,18 +1,15 @@
 import { useState } from 'react'
-import type { Dataset, Run, Slice } from '../../../shared/types'
+import type { Dataset, Run } from '../../../shared/types'
 import {
-  acceptanceRuns,
-  duration,
-  groupLabels,
-  groupRuns,
-  money,
-  percent,
-  summarize,
-  roleSummary,
-  timeToAccepted,
-  validatedDiscovery,
-  type GroupBy
-} from '../../../shared/metrics'
+  compareData,
+  runFilterLabels,
+  sliceFilterLabels,
+  type ComparisonFilters,
+  type ComparisonSort,
+  type FilterKey
+} from '../../../shared/comparison'
+import { burnLabel, displayTimestamp, qualityLabel } from '../../../shared/presentation'
+import { duration, groupLabels, money, percent, type GroupBy } from '../../../shared/metrics'
 import { Empty, Metric } from '../components/ui'
 import { RunTable } from '../components/RunTable'
 
@@ -23,72 +20,50 @@ interface Props {
 }
 export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Element {
   const [groupBy, setGroupBy] = useState<GroupBy>('model')
-  const [filters, setFilters] = useState<Record<string, string>>({})
+  const [filters, setFilters] = useState<ComparisonFilters>({})
   const [selected, setSelected] = useState<string>()
-  const [sort, setSort] = useState('label')
-  const sliceKeys: (keyof Slice)[] = [
-    'project',
-    'taskShape',
-    'ambiguity',
-    'risk',
-    'productionModel',
-    'experiment',
-    'disposition'
-  ]
-  const runKeys: (keyof Run)[] = ['model', 'thinking', 'role', 'sessionMode', 'contextMode']
-  const slices = data.slices.filter((s) =>
-    sliceKeys.every((k) => !filters[k] || s[k] === filters[k])
-  )
-  const runs = data.runs.filter(
-    (r) =>
-      slices.some((s) => s.id === r.sliceId) &&
-      runKeys.every((k) => !filters[k] || r[k] === filters[k])
-  )
-  const summary = summarize(runs)
-  const groups = groupRuns(data, runs, groupBy)
-    .map((group) => ({
-      ...group,
-      stats: summarize(group.runs),
-      repair: roleSummary(group.runs, 'Repair'),
-      critic: roleSummary(group.runs, 'Critic')
-    }))
-    .sort((a, b) =>
-      sort === 'cost'
-        ? b.stats.cost - a.stats.cost
-        : sort === 'time'
-          ? b.stats.minutes - a.stats.minutes
-          : a.label.localeCompare(b.label)
-    )
-  const selectedGroup = groups.find((g) => g.key === selected)
-  const shownRuns = selectedGroup?.runs ?? runs
+  const [sort, setSort] = useState<ComparisonSort>('label')
+  const [exportBusy, setExportBusy] = useState(false)
+  const [exportError, setExportError] = useState('')
+  const [exportMessage, setExportMessage] = useState('')
+  const context = { filters, groupBy, sort, ...(selected ? { selectedGroup: selected } : {}) }
+  const { slices, runs, summary, groups, selectedGroup, shownRuns, discoveries, accepted } =
+    compareData(data, context)
+  const exportComparison = async (): Promise<void> => {
+    setExportBusy(true)
+    setExportError('')
+    setExportMessage('')
+    try {
+      const path = await window.pennytel.exportComparison({ revision: data.revision, context })
+      if (path)
+        setExportMessage(
+          `Comparison exported to ${path}. This analysis is not an importable dataset.`
+        )
+    } catch (e) {
+      setExportError((e as Error).message)
+    } finally {
+      setExportBusy(false)
+    }
+  }
+  const sliceKeys = Object.keys(sliceFilterLabels) as (keyof typeof sliceFilterLabels)[]
+  const runKeys = Object.keys(runFilterLabels) as (keyof typeof runFilterLabels)[]
   const knownMax = Math.max(...groups.map((g) => g.stats.cost), 0)
-  const discoveries = data.discoveries.filter(
-    (d) => d.runId && runs.some((r) => r.id === d.runId) && validatedDiscovery(d)
-  )
-  const filterOptions: [string, string, string[]][] = [
+  const filterOptions: [FilterKey, string, string[]][] = [
     ...sliceKeys.map(
       (k) =>
         [
           k,
-          {
-            project: 'Project',
-            taskShape: 'Task shape',
-            ambiguity: 'Ambiguity',
-            risk: 'Risk',
-            productionModel: 'Workflow',
-            experiment: 'Study',
-            disposition: 'Slice disposition'
-          }[k] ?? k,
+          sliceFilterLabels[k],
           [...new Set(data.slices.map((s) => String(s[k] ?? '')).filter(Boolean))].sort()
-        ] as [string, string, string[]]
+        ] as [FilterKey, string, string[]]
     ),
     ...runKeys.map(
       (k) =>
         [
           k,
-          groupLabels[k as GroupBy] ?? k,
+          runFilterLabels[k],
           [...new Set(data.runs.map((r) => String(r[k] ?? '')).filter(Boolean))].sort()
-        ] as [string, string, string[]]
+        ] as [FilterKey, string, string[]]
     )
   ]
   return (
@@ -99,10 +74,25 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
           <h1>Compare the work</h1>
           <p className="muted">Find useful differences, then inspect the runs that explain them.</p>
         </div>
-        <span className="count-tag">
-          {runs.length} runs · {slices.length} slices
-        </span>
+        <div className="button-row">
+          <span className="count-tag">
+            {runs.length} runs · {slices.length} slices
+          </span>
+          <button className="primary" disabled={exportBusy} onClick={exportComparison}>
+            {exportBusy ? 'Exporting…' : 'Export comparison'}
+          </button>
+        </div>
       </div>
+      {exportError && (
+        <p className="error" role="alert">
+          {exportError}
+        </p>
+      )}
+      {exportMessage && (
+        <p className="success" role="status">
+          {exportMessage}
+        </p>
+      )}
       <section className="panel filters">
         <div className="toolbar">
           <label>
@@ -127,7 +117,7 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
             <select
               aria-label="Order groups"
               value={sort}
-              onChange={(e) => setSort(e.target.value)}
+              onChange={(e) => setSort(e.target.value as ComparisonSort)}
             >
               <option value="label">Name</option>
               <option value="cost">Known cost, highest first</option>
@@ -286,9 +276,8 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
                 </thead>
                 <tbody>
                   {groups.map((g) => {
-                    const found = data.findings.filter(
-                      (f) =>
-                        f.runId && g.runs.some((r) => r.id === f.runId) && f.status !== 'Dismissed'
+                    const found = g.findings.filter(
+                      (f) => f.status !== 'Dismissed' && f.severity !== 'Observation'
                     )
                     return (
                       <tr key={g.key}>
@@ -326,7 +315,7 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
                           </small>
                         </td>
                         <td>
-                          {g.stats.burnKnown ? g.stats.burn : 'Unknown'}
+                          {burnLabel(g.stats.burnKnown ? g.stats.burn : null)}
                           <small>
                             {g.stats.burnKnown}/{g.runs.length}
                           </small>
@@ -340,9 +329,7 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
                               'No defects recorded'}
                           </small>
                         </td>
-                        <td>
-                          {discoveries.filter((d) => g.runs.some((r) => r.id === d.runId)).length}
-                        </td>
+                        <td>{g.discoveries.length}</td>
                       </tr>
                     )
                   })}
@@ -355,7 +342,7 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
           These are descriptive comparisons, not controlled experiments. Small samples, task mix,
           incomplete data, and grading differences matter. “Found” attributes discovery to the
           evaluating run; it does not assign fault to that model. All role subtotals use known costs
-          only. Meter units must be consistent to compare burn.
+          only. Meter burn is in percentage points of remaining allowance consumed.
         </p>
       </section>
       <section className="panel">
@@ -375,12 +362,12 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
           <div>
             <h2>Accepted slice economics</h2>
             <p className="muted">
-              Complete production cost across all models and roles. Uses slice filters above; run
-              filters do not remove downstream work.
+              Run filters qualify slices for this cohort. Each qualifying slice retains its full
+              relevant lifecycle across models and roles, including critic and repair costs.
             </p>
           </div>
         </div>
-        {!slices.some((s) => s.disposition === 'Accepted') ? (
+        {!accepted.length ? (
           <Empty title="No accepted slices in this cohort">
             Set a slice’s disposition, acceptance time, quality grade, and preference when its work
             is accepted.
@@ -401,75 +388,62 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
                 </tr>
               </thead>
               <tbody>
-                {slices
-                  .filter((s) => s.disposition === 'Accepted')
-                  .map((s) => {
-                    const lifecycle = acceptanceRuns(
-                        s,
-                        data.runs.filter((r) => r.sliceId === s.id)
-                      ),
-                      stats = summarize(lifecycle)
-                    const defects = data.findings.filter(
-                      (f) =>
-                        f.sliceId === s.id &&
-                        f.severity !== 'Observation' &&
-                        f.status !== 'Dismissed'
-                    )
-                    const repairRatio =
-                      stats.priced === stats.total && stats.implementationCost > 0
-                        ? stats.repairCost / stats.implementationCost
-                        : null
-                    return (
-                      <tr key={s.id}>
-                        <td>
-                          <button className="record-link" onClick={() => onOpenSlice(s.id)}>
-                            {s.title}
-                          </button>
+                {accepted.map((economics) => {
+                  const { slice: s, stats, repair, critic, repairRatio } = economics
+                  const defects = economics.findings.filter(
+                    (f) => f.severity !== 'Observation' && f.status !== 'Dismissed'
+                  )
+                  return (
+                    <tr key={s.id}>
+                      <td>
+                        <button className="record-link" onClick={() => onOpenSlice(s.id)}>
+                          {s.title}
+                        </button>
+                        <small>
+                          {s.productionModel ?? 'Unknown workflow'} · {s.ambiguity ?? 'Unknown'}{' '}
+                          ambiguity
+                        </small>
+                      </td>
+                      <td>
+                        {s.preferredCandidate ?? 'No preference'}
+                        <small>Quality: {qualityLabel(s.qualityGrade)}</small>
+                      </td>
+                      <td>
+                        {stats.priced ? money(stats.cost) : 'Unknown'}
+                        <small>
+                          {stats.priced}/{stats.total} priced
+                          {stats.priced < stats.total ? ' · incomplete' : ''}
+                          {!s.acceptedAt ? ' · all runs (no cutoff)' : ''}
+                        </small>
+                      </td>
+                      <td>
+                        {duration(economics.elapsedMinutes)}
+                        {s.acceptedAt && (
                           <small>
-                            {s.productionModel ?? 'Unknown workflow'} · {s.ambiguity ?? 'Unknown'}{' '}
-                            ambiguity
+                            <time dateTime={s.acceptedAt}>{displayTimestamp(s.acceptedAt)}</time>
                           </small>
-                        </td>
-                        <td>
-                          {s.preferredCandidate ?? 'No preference'}
-                          <small>Quality: {s.qualityGrade ?? 'Ungraded'}</small>
-                        </td>
-                        <td>
-                          {stats.priced ? money(stats.cost) : 'Unknown'}
-                          <small>
-                            {stats.priced}/{stats.total} priced
-                            {stats.priced < stats.total ? ' · incomplete' : ''}
-                            {!s.acceptedAt ? ' · all runs (no cutoff)' : ''}
-                          </small>
-                        </td>
-                        <td>{duration(timeToAccepted(s, lifecycle))}</td>
-                        <td>
-                          {money(roleSummary(lifecycle, 'Repair').cost)} /{' '}
-                          {money(roleSummary(lifecycle, 'Critic').cost)}
-                          <small>Repair / implementation: {percent(repairRatio)}</small>
-                        </td>
-                        <td>{stats.repairRuns}</td>
-                        <td>
-                          {['P0', 'P1', 'P2']
-                            .map(
-                              (sev) => `${sev}: ${defects.filter((f) => f.severity === sev).length}`
-                            )
-                            .join(' · ')}
-                          <small>
-                            {[...new Set(defects.map((f) => f.category))].join(', ') ||
-                              'None recorded'}
-                          </small>
-                        </td>
-                        <td>
-                          {
-                            data.discoveries.filter(
-                              (d) => d.sliceId === s.id && validatedDiscovery(d)
-                            ).length
-                          }
-                        </td>
-                      </tr>
-                    )
-                  })}
+                        )}
+                      </td>
+                      <td>
+                        {money(repair.cost)} / {money(critic.cost)}
+                        <small>Repair / implementation: {percent(repairRatio)}</small>
+                      </td>
+                      <td>{stats.repairRuns}</td>
+                      <td>
+                        {['P0', 'P1', 'P2']
+                          .map(
+                            (sev) => `${sev}: ${defects.filter((f) => f.severity === sev).length}`
+                          )
+                          .join(' · ')}
+                        <small>
+                          {[...new Set(defects.map((f) => f.category))].join(', ') ||
+                            'None recorded'}
+                        </small>
+                      </td>
+                      <td>{economics.discoveries.length}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

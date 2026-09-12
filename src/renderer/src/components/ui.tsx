@@ -2,13 +2,20 @@ import { useEffect, useRef, type ReactNode } from 'react'
 import { fields } from '../../../shared/fields'
 import type { Entity, Run, Table } from '../../../shared/types'
 import {
+  displayDate,
+  displayTimestamp,
+  qualityLabel,
+  burnLabel
+} from '../../../shared/presentation'
+import {
   costIssues,
   money,
   runCost,
   runMinutes,
   duration,
   usageBurn,
-  percent
+  percent,
+  cacheRatio
 } from '../../../shared/metrics'
 
 export function Empty({
@@ -111,11 +118,25 @@ export function RecordDetails({
           <div key={field.key} className={field.type === 'textarea' ? 'full' : ''}>
             <dt>{field.label}</dt>
             <dd>
-              {typeof values[field.key] === 'boolean'
-                ? values[field.key]
-                  ? 'Yes'
-                  : 'No'
-                : String(values[field.key])}
+              {field.type === 'timestamp' ? (
+                <time dateTime={String(values[field.key])} title={String(values[field.key])}>
+                  {displayTimestamp(String(values[field.key]))}
+                </time>
+              ) : field.type === 'date' ? (
+                <time dateTime={String(values[field.key])}>
+                  {displayDate(String(values[field.key]))}
+                </time>
+              ) : field.key === 'qualityGrade' ? (
+                qualityLabel(Number(values[field.key]))
+              ) : typeof values[field.key] === 'boolean' ? (
+                values[field.key] ? (
+                  'Yes'
+                ) : (
+                  'No'
+                )
+              ) : (
+                String(values[field.key])
+              )}
             </dd>
           </div>
         ))}
@@ -130,15 +151,8 @@ export function RunMetrics({ run }: { run: Run }): React.JSX.Element {
       <div className="metrics">
         <Metric label="API-equivalent cost" value={money(runCost(run))} />
         <Metric label="Wall clock" value={duration(runMinutes(run))} />
-        <Metric
-          label="Cache ratio"
-          value={percent(
-            run.inputTokens && run.cachedInputTokens !== undefined
-              ? run.cachedInputTokens / run.inputTokens
-              : null
-          )}
-        />
-        <Metric label="Meter burn" value={usageBurn(run) ?? 'Unknown'} />
+        <Metric label="Cache ratio" value={percent(cacheRatio(run))} />
+        <Metric label="Meter burn" value={burnLabel(usageBurn(run))} />
       </div>
       {issues.length > 0 && (
         <p className="notice">
@@ -150,11 +164,11 @@ export function RunMetrics({ run }: { run: Run }): React.JSX.Element {
         <p className="footnote">
           Saved {snapshot.source.toLowerCase()} rates ·{' '}
           {snapshot.effectiveDate
-            ? `effective ${snapshot.effectiveDate} UTC`
+            ? `effective ${displayDate(snapshot.effectiveDate)} UTC`
             : 'effective date unknown'}{' '}
           · input {money(snapshot.inputRate)}, cached {money(snapshot.cachedRate)}, output{' '}
           {money(snapshot.outputRate)} per million tokens. Later catalog edits do not change these
-          rates.
+          rates. {snapshot.rateSource && <>Source: {snapshot.rateSource}</>}
         </p>
       )}
     </>

@@ -26,7 +26,7 @@ Use Electron, not the renderer URL in a standalone browser. The renderer deliber
 3. Add implementation, criticism, repair, or other runs. A run needs an ID, slice, run type, and factory role. Record the model/provider, timestamps, and token counts to calculate cost. Enter explicit zeroes when usage is known to be zero.
 4. Add findings with distinct severity/category and links to discovery/repair runs. Add autonomous discoveries and update independent validation when evidence arrives.
 5. When work is accepted, set the slice disposition, acceptance timestamp, quality grade, and preferred candidate. Operator-measured time to acceptance is also supported.
-6. In **Compare**, group and filter runs, inspect the underlying evidence, and compare full accepted-slice economics. Run filters never remove downstream work from accepted-slice totals.
+6. In **Compare**, group and filter runs, inspect the underlying evidence, and compare full accepted-slice economics. A slice must contain a run matching all active run filters to qualify; its cost still includes the full relevant lifecycle across all models and roles. Use **Export comparison** to save the current derived analysis separately from the raw dataset.
 
 Every record can be edited. Deletion asks for confirmation and protects referenced slices/runs. Deleting a price retains run snapshots. Closing an edited form requires explicit discard; a failed save keeps the draft open. Unsaved drafts do not persist after quitting the application.
 
@@ -40,21 +40,29 @@ Export a JSON dataset through the native save dialog. Import a JSON file or past
 
 ## Measurement conventions
 
-- Input tokens **include** cached input. Output tokens **include** reasoning tokens; reasoning is not billed twice.
+- Input tokens mean **fresh / noncached** input. Cached input is additional and may exceed fresh input. Cost is `(fresh × input rate + cached × cached rate + output × output rate) / 1,000,000`. Output tokens **include** reasoning tokens; reasoning is not billed twice.
 - Automatic pricing uses the latest effective date on or before the run's start date in UTC and an exact model/provider match. A run stores a price snapshot; catalog edits do not recalculate history. Edit/save an unpriced run after adding a matching price. All three rate overrides allow an explicit historical correction.
-- Missing data remains unknown. Partial totals show known cost and record coverage. No-rate or unknown-token runs are not treated as free. Cache ratio is token-weighted across runs with complete cache telemetry.
+- Missing data remains unknown. Partial totals show known cost and record coverage. No-rate or unknown-token runs are not treated as free. Cache ratio is `cached / (fresh + cached)`, token-weighted across runs with both counts known. A zero denominator stays unknown.
 - Run time is the sum of recorded wall times. Time to acceptance is operator-measured or elapsed from the first recorded run to the acceptance timestamp; concurrent runs are not summed into elapsed acceptance time.
 - Accepted-slice cost includes all candidates and roles that started by acceptance, plus undated runs. Without an acceptance timestamp it includes all runs and says so. A run crossing the acceptance boundary must have its timestamps corrected. Post-acceptance findings/discoveries remain in the slice evidence.
-- Subscription burn is separate from dollar cost. Use an increasing consumed-meter scale, or supply explicit burn for a reset. Local hour and weekday are explicit operator-local telemetry; they are not inferred from the viewing computer's timezone.
-- Validated autonomous discovery means `selfInitiated: true`, `inPrompt: false`, and `validation: "Yes"`. Unknown prompt presence does not earn credit. Adoption is separate from validation.
-- A finding's run link identifies where it was discovered, not which model caused it. P0/P1/P2 counts exclude dismissed findings and observations but retain repaired defects. Quality grades are operator-defined; no synthetic score or causal ranking is imposed.
+- Subscription burn is separate from dollar cost. Record **remaining percentages** from 0–100: `94 → 92` burns **2 percentage points**. An increase or `usageReset: true` makes inferred burn unknown. Explicit measured `usageBurn` overrides these rules. Endpoints alone cannot detect a hidden reset; mark one when known. Local hour and weekday remain explicit operator-local telemetry.
+- Validated autonomous discovery means `selfInitiated: true`, `inPrompt: false`, and `validation: "Yes"`. Unknown prompt presence does not earn credit. Adoption is separately recorded as Yes, No, or Deferred.
+- A finding's run link identifies where it was discovered, not which model caused it. P0/P1/P2 counts exclude dismissed findings and observations but retain repaired defects. Findings preserve title, description, evidence, contract/invariant, impact, confidence, and separate notes.
+- Final product quality is an **operator-assigned integer 1–5**. Compare can filter by grade; the analysis export provides grade distributions without a synthetic combined score.
+- Normal timestamp displays use human-readable local dates/times with a timezone label. Persisted timestamps and exported timestamps remain ISO with timezone. Calendar-only dates are displayed without timezone shifts.
+
+## Authoritative schema and analysis export
+
+[Issue #1](https://github.com/recoveryrob83-lab/PennyTel-AX/issues/1) and all six relevant tabs in the [PennyTel Sheet](https://docs.google.com/spreadsheets/d/11U6HKqnbNN0NsE-y8CKrg6P4KOXlei0MhQXJaUdD6s4/edit) were read through the connected GitHub and Google Drive/Sheets capabilities before repairs began. See the [complete reconciliation](docs/schema-reconciliation.md) for each field and the intentional differences. Per the issue, there is no production dataset; the v1 contract is corrected directly, without migration. Old synthetic exports with inclusive input semantics or letter grades must be regenerated or explicitly corrected before use.
+
+**Export dataset** remains canonical, raw, importable JSON. **Export comparison** creates `kind: "pennytel-comparison"`, analysis format v1 JSON containing app version, source revision, generated timestamp, active context, cohort/evidence IDs, group summaries, full acceptance economics, severity/category counts, validated discoveries, grade distributions, and coverage. It is explicitly rejected by telemetry import. The main process derives it from its authoritative snapshot using the same calculations as the UI. Partial totals and unknowns remain distinguishable; no PDF/CSV/reporting infrastructure is added. See [the analysis contract](docs/comparison-export.md).
 
 ## Verification
 
 ```bash
 npm run typecheck
 npm test
-npm run lint
+npm run lint -- --max-warnings=0
 npm run build
 npm run test:electron
 ```
