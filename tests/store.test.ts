@@ -42,14 +42,45 @@ describe('durable local storage', () => {
         expect(await readFile(backup, 'utf8')).toBe(kind === 'valid' ? contents : '{broken')
     }
   )
-  it('detects a backup appearing after empty load, preserving it on first save', async () => {
-    const directory = await qaDirectory('late-backup-')
+  it.each(['backup', 'live', 'both'])(
+    'rejects externally appearing %s after new-profile load without changing bytes',
+    async (kind) => {
+      const directory = await qaDirectory('late-storage-')
+      const store = new TelemetryStore(directory)
+      const initial = await store.load()
+      const backup = join(directory, 'telemetry.backup.json')
+      const liveBytes = JSON.stringify(initial.data, null, 2) + '\n'
+      const backupBytes =
+        JSON.stringify({
+          ...emptyDataset(),
+          slices: [{ id: 'recovery-only', title: 'Recovery-only record' }]
+        }) + '\n'
+      if (kind !== 'backup') await writeFile(store.path, liveBytes)
+      if (kind !== 'live') await writeFile(backup, backupBytes)
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(store.mutate(command)).rejects.toThrow('Storage state changed externally')
+        expect((await store.load()).data).toEqual(initial.data)
+        if (kind !== 'backup') expect(await readFile(store.path, 'utf8')).toBe(liveBytes)
+        else await expect(readFile(store.path)).rejects.toMatchObject({ code: 'ENOENT' })
+        if (kind !== 'live') expect(await readFile(backup, 'utf8')).toBe(backupBytes)
+        else await expect(readFile(backup)).rejects.toMatchObject({ code: 'ENOENT' })
+      }
+    }
+  )
+  it('saves an untouched new profile, then rotates previous live revisions normally', async () => {
+    const directory = await qaDirectory('new-rotation-')
     const store = new TelemetryStore(directory)
-    await store.load()
+    expect((await store.load()).data).toEqual(emptyDataset())
+    expect((await store.mutate(command)).data.revision).toBe(1)
     const backup = join(directory, 'telemetry.backup.json')
-    await writeFile(backup, 'recovery evidence')
-    await expect(store.mutate(command)).rejects.toThrow('Recovery state')
-    expect(await readFile(backup, 'utf8')).toBe('recovery evidence')
+    await expect(readFile(backup)).rejects.toMatchObject({ code: 'ENOENT' })
+    for (const revision of [1, 2]) {
+      const current = revision === 1 ? store : new TelemetryStore(directory)
+      await current.load()
+      const previous = await readFile(store.path, 'utf8')
+      expect((await current.mutate({ ...command, revision })).data.revision).toBe(revision + 1)
+      expect(await readFile(backup, 'utf8')).toBe(previous)
+    }
   })
   it('protects the backup when live data disappears or changes during a session', async () => {
     const directory = await qaDirectory('lost-live-')

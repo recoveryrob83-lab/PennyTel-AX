@@ -13,12 +13,13 @@ import {
 export class TelemetryStore {
   readonly path: string
   private data?: Dataset
+  private awaitingFirstWrite = false
   private loading?: Promise<Dataset>
   private queue: Promise<unknown> = Promise.resolve()
   constructor(private directory: string) {
     this.path = join(directory, 'telemetry.json')
   }
-  private async requireNewProfile(): Promise<void> {
+  private async requireNewProfile(beforeFirstWrite = false): Promise<void> {
     // lstat also detects dangling links: unreadable recovery evidence is not a new profile.
     for (const path of [this.path, join(this.directory, 'telemetry.backup.json')]) {
       try {
@@ -27,6 +28,10 @@ export class TelemetryStore {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
         throw error
       }
+      if (beforeFirstWrite)
+        throw new Error(
+          'Storage state changed externally. Files preserved; writes are blocked. Close and reopen PennyTel, or repair the telemetry files while PennyTel is closed.'
+        )
       throw new Error(
         `Recovery state at ${this.path}. Files have been preserved; writes are blocked. Close PennyTel, preserve a copy of telemetry.backup.json, then restore a valid dataset to telemetry.json and reopen PennyTel.`
       )
@@ -48,6 +53,7 @@ export class TelemetryStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         await this.requireNewProfile()
+        this.awaitingFirstWrite = true
         this.data = emptyDataset()
         return this.data
       }
@@ -90,6 +96,8 @@ export class TelemetryStore {
     const operation = this.queue.then(async () => {
       const previous = await this.read()
       const next = applyMutation(previous, command)
+      // Absence at initial load is session provenance, even if a later file is equal.
+      if (this.awaitingFirstWrite) await this.requireNewProfile(true)
       // Recheck before rotating the backup, including after an earlier empty load.
       // Never replace recovery evidence using stale cached state.
       let live: string | undefined
@@ -114,6 +122,7 @@ export class TelemetryStore {
           JSON.stringify(previous, null, 2)
         )
       await this.atomicWrite(this.path, JSON.stringify(next, null, 2))
+      this.awaitingFirstWrite = false
       this.data = next
       return this.load()
     })
