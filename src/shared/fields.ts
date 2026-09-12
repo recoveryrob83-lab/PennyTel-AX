@@ -70,7 +70,7 @@ export const fields: Record<Table, Field[]> = {
       key: 'acceptedAt',
       label: 'Accepted at',
       type: 'timestamp',
-      hint: 'ISO timestamp with timezone, e.g. 2026-09-11T15:30:00-05:00.'
+      hint: 'Edit local date/time or use the exact timestamp option. Stored as ISO with timezone.'
     },
     number(
       'timeToAcceptedMinutes',

@@ -201,6 +201,7 @@ try {
 
   await button('Edit slice').click()
   await page.getByRole('dialog').getByLabel('Disposition', { exact: true }).selectOption('Accepted')
+  await button('Use exact timestamp (ISO with timezone)').click()
   await field('Accepted at').fill('2026-09-11T11:00:00-05:00')
   assert.deepEqual(await field('Product quality grade').locator('option').allTextContents(), [
     'Unknown / not recorded',
@@ -237,6 +238,7 @@ try {
   await field('Record ID').fill('qa-other-slice')
   await field('Title').fill('Synthetic QA · other model only')
   await page.getByRole('dialog').getByLabel('Disposition', { exact: true }).selectOption('Accepted')
+  await button('Use exact timestamp (ISO with timezone)').click()
   await field('Accepted at').fill('2026-09-11T11:00:00-05:00')
   await field('Product quality grade').selectOption('3')
   await save('slice')

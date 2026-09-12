@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises'
+import { lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { applyMutation, mergeImport, validateDataset } from '../shared/data'
@@ -18,6 +18,20 @@ export class TelemetryStore {
   constructor(private directory: string) {
     this.path = join(directory, 'telemetry.json')
   }
+  private async requireNewProfile(): Promise<void> {
+    // lstat also detects dangling links: unreadable recovery evidence is not a new profile.
+    for (const path of [this.path, join(this.directory, 'telemetry.backup.json')]) {
+      try {
+        await lstat(path)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+        throw error
+      }
+      throw new Error(
+        `Recovery state at ${this.path}. Files have been preserved; writes are blocked. Close PennyTel, preserve a copy of telemetry.backup.json, then restore a valid dataset to telemetry.json and reopen PennyTel.`
+      )
+    }
+  }
   private async read(): Promise<Dataset> {
     if (this.data) return this.data
     if (!this.loading) this.loading = this.readFromDisk()
@@ -33,6 +47,7 @@ export class TelemetryStore {
       contents = await readFile(this.path, 'utf8')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        await this.requireNewProfile()
         this.data = emptyDataset()
         return this.data
       }
@@ -75,11 +90,29 @@ export class TelemetryStore {
     const operation = this.queue.then(async () => {
       const previous = await this.read()
       const next = applyMutation(previous, command)
+      // Recheck before rotating the backup, including after an earlier empty load.
+      // Never replace recovery evidence using stale cached state.
+      let live: string | undefined
+      try {
+        live = await readFile(this.path, 'utf8')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        await this.requireNewProfile()
+        if (previous.revision !== 0)
+          throw new Error(
+            'Live dataset disappeared. Files preserved; close PennyTel and restore it.'
+          )
+      }
+      if (live !== undefined && JSON.stringify(JSON.parse(live)) !== JSON.stringify(previous))
+        throw new Error(
+          'Live dataset changed outside PennyTel. Files preserved; close and reopen PennyTel.'
+        )
       await mkdir(this.directory, { recursive: true, mode: 0o700 })
-      await this.atomicWrite(
-        join(this.directory, 'telemetry.backup.json'),
-        JSON.stringify(previous, null, 2)
-      )
+      if (live !== undefined)
+        await this.atomicWrite(
+          join(this.directory, 'telemetry.backup.json'),
+          JSON.stringify(previous, null, 2)
+        )
       await this.atomicWrite(this.path, JSON.stringify(next, null, 2))
       this.data = next
       return this.load()

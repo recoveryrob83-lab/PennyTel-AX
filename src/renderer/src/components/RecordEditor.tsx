@@ -3,6 +3,7 @@ import { fields, singular, type Field } from '../../../shared/fields'
 import { validateRecord } from '../../../shared/data'
 import type { Dataset, Entity, Table } from '../../../shared/types'
 import { Modal } from './ui'
+import { AcceptanceTime } from './AcceptanceTime'
 
 export interface EditTarget {
   table: Table
@@ -74,6 +75,21 @@ export function RecordEditor({
   }
   const renderField = (field: Field): React.JSX.Element => {
     const value = values[field.key]
+    if (table === 'slices' && field.key === 'acceptedAt')
+      return (
+        <AcceptanceTime
+          key={field.key}
+          value={String(value ?? '')}
+          onChange={(raw) => update(field, raw)}
+          canAcceptNow={values.disposition === 'In progress'}
+          onAcceptNow={(iso) => {
+            if (values.acceptedAt || values.disposition !== 'In progress') return
+            setValues({ ...values, disposition: 'Accepted', acceptedAt: iso })
+            setDiscard(false)
+            setError('')
+          }}
+        />
+      )
     const inputId = `field-${field.key}`
     const common = {
       id: inputId,

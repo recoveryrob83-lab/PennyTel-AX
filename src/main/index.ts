@@ -1,8 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { join, resolve } from 'node:path'
-import { readFile, stat, writeFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { TelemetryStore } from './store'
+import { writeExport } from './export'
 import type { Mutation } from '../shared/types'
 import { comparisonExport, validateComparisonRequest } from '../shared/comparison'
 import { version as appVersion } from '../../package.json'
@@ -89,15 +90,10 @@ else {
         filters: [{ name: 'JSON', extensions: ['json'] }]
       })
       if (result.canceled || !result.filePath) return null
-      if (
-        resolve(result.filePath) === store.path ||
-        resolve(result.filePath) === join(app.getPath('userData'), 'telemetry.backup.json')
-      )
-        throw new Error('Choose a path outside the live dataset and its backup.')
-      await writeFile(result.filePath, JSON.stringify(contents, null, 2), {
-        encoding: 'utf8',
-        mode: 0o600
-      })
+      await writeExport(result.filePath, contents, [
+        store.path,
+        join(app.getPath('userData'), 'telemetry.backup.json')
+      ])
       return result.filePath
     }
     mainWindow.on('ready-to-show', () => mainWindow.show())

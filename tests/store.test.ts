@@ -1,7 +1,14 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile, unlink, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import * as fs from 'node:fs/promises'
 import { TelemetryStore } from '../src/main/store'
+import { emptyDataset } from '../src/shared/types'
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof fs>()
+  return { ...actual, rename: vi.fn(actual.rename) }
+})
 
 async function qaDirectory(prefix: string): Promise<string> {
   const base = join(process.cwd(), 'test-results')
@@ -10,7 +17,74 @@ async function qaDirectory(prefix: string): Promise<string> {
 }
 
 describe('durable local storage', () => {
-  it('does not publish memory state after a failed atomic replacement', async () => {
+  const command = {
+    kind: 'save',
+    table: 'slices',
+    record: { id: 'new', title: 'New' },
+    revision: 0
+  } as const
+  it.each(['valid', 'corrupt', 'dangling'])(
+    'blocks backup-only startup and writes with a %s backup',
+    async (kind) => {
+      const directory = await qaDirectory('backup-only-')
+      const backup = join(directory, 'telemetry.backup.json')
+      const contents = JSON.stringify({
+        ...emptyDataset(),
+        slices: [{ id: 'saved', title: 'Recovery evidence' }]
+      })
+      if (kind === 'dangling') await symlink(join(directory, 'missing.json'), backup)
+      else await writeFile(backup, kind === 'valid' ? contents : '{broken')
+      const store = new TelemetryStore(directory)
+      await expect(store.load()).rejects.toThrow('Recovery state')
+      await expect(store.mutate(command)).rejects.toThrow('Recovery state')
+      await expect(readFile(store.path)).rejects.toMatchObject({ code: 'ENOENT' })
+      if (kind !== 'dangling')
+        expect(await readFile(backup, 'utf8')).toBe(kind === 'valid' ? contents : '{broken')
+    }
+  )
+  it('detects a backup appearing after empty load, preserving it on first save', async () => {
+    const directory = await qaDirectory('late-backup-')
+    const store = new TelemetryStore(directory)
+    await store.load()
+    const backup = join(directory, 'telemetry.backup.json')
+    await writeFile(backup, 'recovery evidence')
+    await expect(store.mutate(command)).rejects.toThrow('Recovery state')
+    expect(await readFile(backup, 'utf8')).toBe('recovery evidence')
+  })
+  it('protects the backup when live data disappears or changes during a session', async () => {
+    const directory = await qaDirectory('lost-live-')
+    const store = new TelemetryStore(directory)
+    await store.mutate(command)
+    await store.mutate({ ...command, revision: 1, record: { id: 'new', title: 'Second' } })
+    const backup = join(directory, 'telemetry.backup.json')
+    const before = await readFile(backup, 'utf8')
+    await unlink(store.path)
+    await expect(store.mutate({ ...command, revision: 2 })).rejects.toThrow('Recovery state')
+    expect(await readFile(backup, 'utf8')).toBe(before)
+    await writeFile(store.path, before)
+    await expect(store.mutate({ ...command, revision: 2 })).rejects.toThrow('changed outside')
+    expect(await readFile(backup, 'utf8')).toBe(before)
+  })
+  it('allows a genuinely new profile and manual recovery without losing recovered records', async () => {
+    const directory = await qaDirectory('new-and-restored-')
+    const store = new TelemetryStore(directory)
+    expect((await store.load()).data.slices).toEqual([])
+    await store.mutate(command)
+    const live = await readFile(store.path, 'utf8')
+    await writeFile(join(directory, 'telemetry.backup.json'), live)
+    await unlink(store.path)
+    await expect(new TelemetryStore(directory).load()).rejects.toThrow('Recovery state')
+    await writeFile(store.path, live)
+    await new TelemetryStore(directory).mutate({
+      ...command,
+      revision: 1,
+      record: { id: 'another', title: 'After restore' }
+    })
+    expect(
+      JSON.parse(await readFile(join(directory, 'telemetry.backup.json'), 'utf8')).slices
+    ).toEqual([command.record])
+  })
+  it('does not publish memory state when the live path becomes unreadable', async () => {
     const directory = await qaDirectory('write-failure-test-')
     const store = new TelemetryStore(directory)
     await store.load()
@@ -25,9 +99,31 @@ describe('durable local storage', () => {
     ).rejects.toThrow()
     expect((await store.load()).data.revision).toBe(0)
     expect((await store.load()).data.slices).toEqual([])
-    expect(
-      JSON.parse(await readFile(join(directory, 'telemetry.backup.json'), 'utf8')).revision
-    ).toBe(0)
+    await expect(readFile(join(directory, 'telemetry.backup.json'))).rejects.toMatchObject({
+      code: 'ENOENT'
+    })
+  })
+  it('retains live and memory state after failed atomic replacement and allows retry', async () => {
+    const directory = await qaDirectory('atomic-failure-')
+    const store = new TelemetryStore(directory)
+    await store.mutate(command)
+    const original = await readFile(store.path, 'utf8')
+    const { rename } = await vi.importActual<typeof fs>('node:fs/promises')
+    const spy = vi.mocked(fs.rename).mockImplementation(async (from, to) => {
+      if (to === store.path) throw new Error('Synthetic rename failure')
+      return rename(from, to)
+    })
+    try {
+      await expect(
+        store.mutate({ ...command, revision: 1, record: { id: 'new', title: 'Changed' } })
+      ).rejects.toThrow('Synthetic rename failure')
+      expect(await readFile(store.path, 'utf8')).toBe(original)
+      expect((await store.load()).data.slices).toEqual([command.record])
+      expect(await readFile(join(directory, 'telemetry.backup.json'), 'utf8')).toBe(original)
+    } finally {
+      spy.mockImplementation(rename)
+    }
+    expect((await store.mutate({ ...command, revision: 1 })).data.revision).toBe(2)
   })
   it('returns detached snapshots to callers', async () => {
     const directory = await qaDirectory('ownership-test-')

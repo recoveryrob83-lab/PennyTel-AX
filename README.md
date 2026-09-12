@@ -25,16 +25,20 @@ Use Electron, not the renderer URL in a standalone browser. The renderer deliber
 2. In **Slice notebook**, create a bounded piece of work. Only an ID and title are required. Add project, task shape, ambiguity, risk, and workflow when known.
 3. Add implementation, criticism, repair, or other runs. A run needs an ID, slice, run type, and factory role. Record the model/provider, timestamps, and token counts to calculate cost. Enter explicit zeroes when usage is known to be zero.
 4. Add findings with distinct severity/category and links to discovery/repair runs. Add autonomous discoveries and update independent validation when evidence arrives.
-5. When work is accepted, set the slice disposition, acceptance timestamp, quality grade, and preferred candidate. Operator-measured time to acceptance is also supported.
+5. Use **Accept now** in an in-progress slice's editor to set Accepted and stamp the current time, then **Save slice**. Quality grade and preferred candidate remain your separate judgments. Edit acceptance with the local date/time control (timezone shown), or choose the explicit exact ISO-with-timezone option. Existing acceptance times disable Accept now until explicitly cleared; changing disposition retains acceptance history. Operator-measured time to acceptance is also supported.
 6. In **Compare**, group and filter runs, inspect the underlying evidence, and compare full accepted-slice economics. A slice must contain a run matching all active run filters to qualify; its cost still includes the full relevant lifecycle across all models and roles. Use **Export comparison** to save the current derived analysis separately from the raw dataset.
 
 Every record can be edited. Deletion asks for confirmation and protects referenced slices/runs. Deleting a price retains run snapshots. Closing an edited form requires explicit discard; a failed save keeps the draft open. Unsaved drafts do not persist after quitting the application.
 
 ## Persistence and portability
 
-The Electron main process owns the dataset. It validates every transaction, serializes writes, checks revisions, writes a temporary file, flushes it, and atomically replaces `telemetry.json`. The previous revision is saved as `telemetry.backup.json`. A single-instance lock prevents competing application instances from editing the same profile.
+The Electron main process owns the dataset. It validates every transaction, serializes writes, checks revisions, writes a temporary file, flushes it, and atomically replaces `telemetry.json`. When a live revision exists, the previous revision is saved as `telemetry.backup.json`; the first save in a genuinely new profile creates only the live file. A single-instance lock prevents competing application instances from editing the same profile.
 
 **Data & portability** shows the exact storage path. Default storage is Electron's per-user PennyTel application-data directory. `PENNYTEL_DATA_DIR=/absolute/path` selects another directory, useful for a portable dataset or isolated QA. Close PennyTel before manually replacing its data files. If a dataset cannot be read or validated, the app preserves it and refuses writes. To recover, close the app and restore a valid export or its previous-revision backup to `telemetry.json`.
+
+A missing live file with any backup entry (including damaged or dangling recovery evidence) also blocks loading and writes. Before restoring, preserve a separate copy of the backup, then copy a valid dataset to `telemetry.json` while PennyTel is closed. Saves recheck the live file before rotating backups; external changes require reopening the app.
+
+Both exports reject live/backup filesystem aliases, including hard links and paths through linked directories. Symlink destinations and indeterminate file identities are rejected conservatively. Choose a regular export file; it is written through atomic replacement rather than truncating a followed link.
 
 Export a JSON dataset through the native save dialog. Import a JSON file or pasted batch, validate/preview, and then add its records. Import is atomic and additive: identical records are skipped; conflicts and invalid relationships are rejected. No existing records are silently overwritten. Export regularly to retain more than one revision. See [the data contract](docs/data-contract.md).
 
@@ -50,6 +54,7 @@ Export a JSON dataset through the native save dialog. Import a JSON file or past
 - A finding's run link identifies where it was discovered, not which model caused it. P0/P1/P2 counts exclude dismissed findings and observations but retain repaired defects. Findings preserve title, description, evidence, contract/invariant, impact, confidence, and separate notes.
 - Final product quality is an **operator-assigned integer 1–5**. Compare can filter by grade; the analysis export provides grade distributions without a synthetic combined score.
 - Normal timestamp displays use human-readable local dates/times with a timezone label. Persisted timestamps and exported timestamps remain ISO with timezone. Calendar-only dates are displayed without timezone shifts.
+- Acceptance edits use the computer's local timezone and persist ISO UTC (`Z`); unchanged timestamps keep their original offset and precision. Nonexistent daylight-saving times are rejected, and repeated local times require the exact timestamp option with an explicit offset.
 
 ## Authoritative schema and analysis export
 

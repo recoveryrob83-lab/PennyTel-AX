@@ -1,5 +1,7 @@
 # PennyTel v0.1 · Issue #1 verification
 
+The subsequent repair of the reviewed acceptance candidate is recorded in [Final bounded repair verification](bounded-repair-verification.md). The results below describe the earlier candidate.
+
 Verified September 11, 2026 (America/Chicago), in `/home/rob/dev/PennyTel-AX`, against [Issue #1](https://github.com/recoveryrob83-lab/PennyTel-AX/issues/1). Baseline: `dd623a6e3fc371cee3a6b085db56cf402214a09d`. This supersedes the first-pass record's token/meter/grade assumptions and earlier unsuccessful Sheet access.
 
 ## Source access gate
