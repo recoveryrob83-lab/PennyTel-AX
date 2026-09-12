@@ -1,5 +1,8 @@
+// Registry startup is now the first guarded write. The pre-seed late-state race is
+// additionally covered by store tests; this exercises external changes after seeding.
 // Exact late-state regression through real Electron, preload, IPC, UI, and disk.
 import { _electron as electron } from 'playwright'
+import { captureElectron } from './electron-qa-capture.mjs'
 import assert from 'node:assert/strict'
 import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -10,11 +13,27 @@ const env = { ...process.env, PENNYTEL_DATA_DIR: directory }
 delete env.ELECTRON_RUN_AS_NODE
 let app
 try {
-  app = await electron.launch({ args: [resolve('out/main/index.js')], env })
+  app = await electron.launch({
+    args: [
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      resolve('out/main/index.js')
+    ],
+    env
+  })
   const page = await app.firstWindow()
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    // Keep animation-frame actionability checks running when another desktop app gains focus.
+    // This is confined to the QA window; production preferences and security stay unchanged.
+    window.webContents.setBackgroundThrottling(false)
+    window.show()
+    window.focus()
+  })
+  await page.bringToFront()
   await page.getByRole('button', { name: '+ New slice', exact: true }).waitFor()
   const initial = await page.evaluate(() => window.pennytel.load())
-  assert.equal(initial.data.revision, 0)
+  assert.equal(initial.data.revision, 1)
   assert.deepEqual(initial.data.slices, [])
   const live = join(directory, 'telemetry.json')
   const backup = join(directory, 'telemetry.backup.json')
@@ -31,7 +50,7 @@ try {
       await window.pennytel.mutate({
         kind: 'save',
         table: 'slices',
-        revision: 0,
+        revision: 1,
         record: { id: 'unexpected', title: 'Must not save' }
       })
       return { success: true }
@@ -49,35 +68,51 @@ try {
   }
   console.log(JSON.stringify(observed, null, 2))
   assert.equal(observed.success, false)
-  assert.match(observed.error, /Storage state changed externally/)
+  assert.match(observed.error, /changed outside PennyTel/)
   assert.ok(observed.liveUnchanged && observed.backupUnchanged && observed.recoverySurvives)
   await page.getByRole('button', { name: '+ New slice', exact: true }).click()
   await page.getByLabel('Title', { exact: false }).fill('Must not save')
   await page.getByRole('button', { name: 'Save slice', exact: true }).click()
   await page
     .getByRole('alert')
-    .filter({ hasText: /Storage state changed externally/ })
+    .filter({ hasText: /changed outside PennyTel/ })
     .waitFor()
   assert.ok(await page.getByRole('dialog').isVisible())
-  assert.equal((await page.evaluate(() => window.pennytel.load())).data.revision, 0)
+  assert.equal((await page.evaluate(() => window.pennytel.load())).data.revision, 1)
   assert.equal(await readFile(live, 'utf8'), liveBytes)
   assert.equal(await readFile(backup, 'utf8'), backupBytes)
-  await page.screenshot({ path: join(directory, 'rejected-save.png') })
+  await captureElectron(app, page, { path: join(directory, 'rejected-save.png') })
   await app.close()
   // Operator restores recovery data while the application is closed.
   await copyFile(backup, live)
-  app = await electron.launch({ args: [resolve('out/main/index.js')], env })
+  app = await electron.launch({
+    args: [
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      resolve('out/main/index.js')
+    ],
+    env
+  })
   const restoredPage = await app.firstWindow()
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    // Keep animation-frame actionability checks running when another desktop app gains focus.
+    // This is confined to the QA window; production preferences and security stay unchanged.
+    window.webContents.setBackgroundThrottling(false)
+    window.show()
+    window.focus()
+  })
+  await restoredPage.bringToFront()
   await restoredPage.getByRole('button', { name: '+ New slice', exact: true }).waitFor()
   const saved = await restoredPage.evaluate(() =>
     window.pennytel.mutate({
       kind: 'save',
       table: 'slices',
-      revision: 0,
+      revision: 1,
       record: { id: 'after-restore', title: 'After restoration' }
     })
   )
-  assert.equal(saved.data.revision, 1)
+  assert.equal(saved.data.revision, 2)
   assert.ok(saved.data.slices.some((slice) => slice.id === 'recovery-only'))
   assert.deepEqual(JSON.parse(await readFile(backup, 'utf8')), JSON.parse(backupBytes))
   console.log(

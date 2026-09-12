@@ -1,4 +1,5 @@
 import type { ComparisonRequest } from './comparison'
+import type { ModelRegistry } from './registry'
 
 export type Level = 'Low' | 'Medium' | 'High'
 export type Thinking = Level | 'ExtraHigh' | 'Max'
@@ -35,7 +36,14 @@ export interface PriceSnapshot extends Rates {
   provider: string
   effectiveDate?: string
   pricingId?: string
-  source: 'Catalog' | 'Override'
+  source: 'Catalog' | 'Override' | 'Registry'
+  modelId?: string
+  providerId?: string
+  offerId?: string
+  registryRevision?: number
+  referenceDate?: string
+  referenceDateSource?: 'run.startAt' | 'run.pricingReferenceDate' | 'slice.startDate'
+  cacheWriteRate?: number
   rateSource?: string
 }
 export interface Run {
@@ -45,6 +53,9 @@ export interface Run {
   role: Role
   candidate?: string
   model?: string
+  modelId?: string
+  providerId?: string
+  pricingReferenceDate?: string
   modelFamily?: string
   thinking?: Thinking
   provider?: string
@@ -159,7 +170,11 @@ export interface EntityMap {
 }
 export type Table = keyof EntityMap
 export type Entity = EntityMap[Table]
-export type Dataset = { [K in Table]: EntityMap[K][] } & { schemaVersion: 1; revision: number }
+export type Dataset = { [K in Table]: EntityMap[K][] } & {
+  schemaVersion: 1
+  revision: number
+  registry?: ModelRegistry
+}
 export const TABLES: Table[] = ['slices', 'runs', 'findings', 'discoveries', 'pricing']
 export const emptyDataset = (): Dataset => ({
   schemaVersion: 1,
@@ -174,6 +189,7 @@ export type Mutation =
   | { kind: 'save'; table: Table; record: Entity; revision: number }
   | { kind: 'delete'; table: Table; id: string; revision: number }
   | { kind: 'import'; text: string; revision: number }
+  | { kind: 'registry-import'; text: string; revision: number }
 export interface LoadedData {
   data: Dataset
   path: string

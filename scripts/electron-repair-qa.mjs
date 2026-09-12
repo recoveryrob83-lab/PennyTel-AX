@@ -1,5 +1,6 @@
 // Bounded repair regression QA: real Electron/preload/IPC/disk, isolated synthetic profile.
 import { _electron as electron } from 'playwright'
+import { captureElectron } from './electron-qa-capture.mjs'
 import assert from 'node:assert/strict'
 import { copyFile, link, mkdir, mkdtemp, readFile, rename, symlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -11,8 +12,25 @@ delete env.ELECTRON_RUN_AS_NODE
 let app, page
 const errors = []
 async function launch() {
-  app = await electron.launch({ args: [resolve('out/main/index.js')], env })
+  app = await electron.launch({
+    args: [
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      resolve('out/main/index.js')
+    ],
+    env
+  })
   page = await app.firstWindow()
+  // Foreground the real QA window before Playwright waits for actionable controls.
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    // Keep animation-frame actionability checks running when another desktop app gains focus.
+    // This is confined to the QA window; production preferences and security stay unchanged.
+    window.webContents.setBackgroundThrottling(false)
+    window.show()
+    window.focus()
+  })
+  await page.bringToFront()
   page.on('pageerror', (error) => errors.push(error.message))
 }
 const button = (name) => page.getByRole('button', { name, exact: true })
@@ -32,7 +50,7 @@ try {
   const before = Date.now()
   await button('Accept now').click()
   assert.equal(await page.getByLabel('Disposition', { exact: true }).inputValue(), 'Accepted')
-  await page.screenshot({ path: join(directory, 'accept-now.png') })
+  await captureElectron(app, page, { path: join(directory, 'accept-now.png') })
   await save()
   const stamped = (await dataset()).slices[0]
   assert.ok(
@@ -185,7 +203,7 @@ try {
     .filter({ hasText: /Recovery state/ })
     .waitFor()
   assert.equal(await readFile(paths[1], 'utf8'), backupBefore)
-  await page.screenshot({ path: join(directory, 'backup-only.png') })
+  await captureElectron(app, page, { path: join(directory, 'backup-only.png') })
   await app.close()
   await copyFile(paths[1], join(directory, 'preserved-recovery.json'))
   await copyFile(paths[1], paths[0])
@@ -202,7 +220,7 @@ try {
   console.log(`Repair QA artifacts: ${directory}`)
 } catch (error) {
   if (page && !page.isClosed())
-    await page.screenshot({ path: join(directory, 'failure.png') }).catch(() => {})
+    await captureElectron(app, page, { path: join(directory, 'failure.png') }).catch(() => {})
   throw error
 } finally {
   if (app) await app.close().catch(() => {})

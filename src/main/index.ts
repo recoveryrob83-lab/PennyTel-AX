@@ -43,7 +43,7 @@ else {
         return action(...args)
       })
     }
-    handle('telemetry:load', () => store.load())
+    handle('telemetry:load', () => store.initializeRegistry())
     handle('telemetry:mutate', (command) => store.mutate(command as Mutation))
     handle('telemetry:preview', (text) => {
       if (typeof text !== 'string') throw new Error('Import must be text.')
@@ -51,7 +51,7 @@ else {
     })
     handle('telemetry:open', async () => {
       const result = await dialog.showOpenDialog(mainWindow, {
-        title: 'Import PennyTel records',
+        title: 'Open PennyTel JSON',
         properties: ['openFile'],
         filters: [{ name: 'PennyTel JSON', extensions: ['json'] }]
       })
@@ -61,7 +61,7 @@ else {
       return readFile(result.filePaths[0], 'utf8')
     })
     handle('telemetry:export', async () => {
-      const { data } = await store.load()
+      const { data } = await store.initializeRegistry()
       return saveExport(
         'Export PennyTel dataset',
         `pennytel-${new Date().toISOString().slice(0, 10)}.json`,
@@ -70,7 +70,7 @@ else {
     })
     handle('telemetry:export-comparison', async (request) => {
       validateComparisonRequest(request)
-      const { data } = await store.load()
+      const { data } = await store.initializeRegistry()
       // Bundle package metadata: direct entry-file launches otherwise report Electron's 0.0.
       const analysis = comparisonExport(data, request, appVersion, new Date().toISOString())
       return saveExport(

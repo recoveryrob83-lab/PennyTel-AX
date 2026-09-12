@@ -7,9 +7,10 @@ import { Modal, RecordDetails, RunMetrics } from './components/ui'
 import { Slices } from './pages/Slices'
 import { Compare } from './pages/Compare'
 import { Pricing } from './pages/Pricing'
+import { Registry } from './pages/Registry'
 import { Data } from './pages/Data'
 
-type Page = 'slices' | 'compare' | 'pricing' | 'data'
+type Page = 'slices' | 'compare' | 'pricing' | 'registry' | 'data'
 async function readLocalData(): Promise<LoadedData> {
   if (!window.pennytel)
     throw new Error(
@@ -20,6 +21,7 @@ async function readLocalData(): Promise<LoadedData> {
 const pages: { id: Page; label: string; icon: string }[] = [
   { id: 'slices', label: 'Slice notebook', icon: '▤' },
   { id: 'compare', label: 'Compare', icon: '▥' },
+  { id: 'registry', label: 'Model Registry', icon: '◇' },
   { id: 'pricing', label: 'Pricing history', icon: '＄' },
   { id: 'data', label: 'Data & portability', icon: '⇄' }
 ]
@@ -60,6 +62,7 @@ export default function App(): React.JSX.Element {
       | Omit<Extract<Mutation, { kind: 'save' }>, 'revision'>
       | Omit<Extract<Mutation, { kind: 'delete' }>, 'revision'>
       | Omit<Extract<Mutation, { kind: 'import' }>, 'revision'>
+      | Omit<Extract<Mutation, { kind: 'registry-import' }>, 'revision'>
   ): Promise<void> => {
     if (!loaded) return
     const result = await window.pennytel.mutate({ ...command, revision: loaded.data.revision })
@@ -205,6 +208,9 @@ export default function App(): React.JSX.Element {
               }}
             />
           )}
+          {page === 'registry' && (
+            <Registry data={data} onImport={(text) => mutate({ kind: 'registry-import', text })} />
+          )}
           {page === 'pricing' && (
             <Pricing
               data={data}
@@ -295,8 +301,8 @@ export default function App(): React.JSX.Element {
             </p>
             {deletion.table === 'pricing' && (
               <p>
-                Run pricing snapshots are retained. Future runs will use other applicable prices or
-                remain unpriced.
+                Run snapshots and migrated registry history are retained. To change registered
+                offers, update Model Registry.
               </p>
             )}
             {deleteError && (

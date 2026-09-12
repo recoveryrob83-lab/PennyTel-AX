@@ -1,5 +1,6 @@
 // All generated telemetry is synthetic QA data in an isolated directory.
 import { _electron as electron } from 'playwright'
+import { captureElectron } from './electron-qa-capture.mjs'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
@@ -14,8 +15,26 @@ let app
 let page
 const failures = []
 async function launch() {
-  app = await electron.launch({ args: [resolve('out/main/index.js')], env, timeout: 30_000 })
+  app = await electron.launch({
+    args: [
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      resolve('out/main/index.js')
+    ],
+    env,
+    timeout: 30_000
+  })
   page = await app.firstWindow()
+  // Foreground the real QA window before Playwright waits for actionable controls.
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    // Keep animation-frame actionability checks running when another desktop app gains focus.
+    // This is confined to the QA window; production preferences and security stay unchanged.
+    window.webContents.setBackgroundThrottling(false)
+    window.show()
+    window.focus()
+  })
+  await page.bringToFront()
   page.on('pageerror', (error) => failures.push(error.message))
   await page.getByRole('heading', { name: 'Slice notebook', exact: true }).waitFor()
 }
@@ -66,7 +85,7 @@ async function addRun({
 try {
   await launch()
   await page.getByText('Start with a piece of work', { exact: true }).waitFor()
-  await page.screenshot({ path: join(directory, '01-empty.png') })
+  await captureElectron(app, page, { path: join(directory, '01-empty.png') })
 
   await button('＄Pricing history')
     .count()
@@ -221,7 +240,7 @@ try {
   assert.match(acceptedDisplay, /Sep 11, 2026/)
   assert.ok(!acceptedDisplay.includes('T11:00:00'))
   await page.getByRole('tab', { name: 'Runs' }).click()
-  await page.screenshot({ path: join(directory, '02-slice.png') })
+  await captureElectron(app, page, { path: join(directory, '02-slice.png') })
 
   await button('Criticism').click()
   await button('Delete run').click()
@@ -263,7 +282,7 @@ try {
   await acceptedSection
     .getByRole('button', { name: 'Synthetic QA · other model only', exact: true })
     .waitFor()
-  await page.screenshot({ path: join(directory, '03-compare.png'), fullPage: true })
+  await captureElectron(app, page, { path: join(directory, '03-compare.png'), fullPage: true })
   await field('Group runs by').selectOption('role')
   await page.getByRole('heading', { name: 'Run economics by factory role' }).waitFor()
   await page.getByText('Narrow the cohort', { exact: true }).click()
@@ -286,7 +305,10 @@ try {
     .getByRole('button', { name: 'Synthetic QA · accepted work', exact: true })
     .waitFor()
   await acceptedSection.getByText('$0.42 / $0.42', { exact: false }).waitFor()
-  await page.screenshot({ path: join(directory, '03-filtered-cohort.png'), fullPage: true })
+  await captureElectron(app, page, {
+    path: join(directory, '03-filtered-cohort.png'),
+    fullPage: true
+  })
   console.log(
     'PASS: frozen historical cost; multi-slice cohort excludes unmatched model but retains other-model critic and repair cost'
   )
@@ -426,7 +448,7 @@ try {
   await button('Close dialog').click()
   await page.setViewportSize({ width: 900, height: 680 })
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
-  await page.screenshot({ path: join(directory, '04-narrow.png') })
+  await captureElectron(app, page, { path: join(directory, '04-narrow.png') })
   assert.deepEqual(failures, [])
   const persisted = JSON.parse(await readFile(join(directory, 'telemetry.json'), 'utf8'))
   assert.equal(persisted.slices.length, 3)
@@ -439,7 +461,7 @@ try {
   console.log(`Electron QA artifacts: ${directory}`)
 } catch (error) {
   if (page && !page.isClosed())
-    await page.screenshot({ path: join(directory, 'failure.png') }).catch(() => {})
+    await captureElectron(app, page, { path: join(directory, 'failure.png') }).catch(() => {})
   console.error(`QA failed. Artifacts: ${directory}`)
   throw error
 } finally {

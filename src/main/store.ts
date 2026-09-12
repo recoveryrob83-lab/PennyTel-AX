@@ -1,6 +1,7 @@
 import { lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import canonicalRegistry from '../../docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json'
 import { applyMutation, mergeImport, validateDataset } from '../shared/data'
 import {
   emptyDataset,
@@ -13,11 +14,27 @@ import {
 export class TelemetryStore {
   readonly path: string
   private data?: Dataset
+  private liveContents?: string
+  private backupState?: string
+  private initializing?: Promise<LoadedData>
   private awaitingFirstWrite = false
   private loading?: Promise<Dataset>
   private queue: Promise<unknown> = Promise.resolve()
   constructor(private directory: string) {
     this.path = join(directory, 'telemetry.json')
+  }
+  private async readBackupState(): Promise<string | undefined> {
+    const path = join(this.directory, 'telemetry.backup.json')
+    let stat
+    try {
+      stat = await lstat(path, { bigint: true })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
+    }
+    if (!stat.isFile())
+      throw new Error('Backup recovery evidence is not a regular file; writes are blocked.')
+    return `${stat.dev}:${stat.ino}:${stat.ctimeNs}:${(await readFile(path)).toString('base64')}`
   }
   private async requireNewProfile(beforeFirstWrite = false): Promise<void> {
     // lstat also detects dangling links: unreadable recovery evidence is not a new profile.
@@ -62,12 +79,35 @@ export class TelemetryStore {
     try {
       const parsed: unknown = JSON.parse(contents)
       validateDataset(parsed)
+      this.backupState = await this.readBackupState()
+      this.liveContents = contents
       this.data = parsed
       return parsed
     } catch (error) {
       throw new Error(
         `Could not load ${this.path}. Your file has been preserved. Restore a valid export or telemetry.backup.json while PennyTel is closed. ${(error as Error).message}`
       )
+    }
+  }
+  // Startup uses the ordinary transaction path: provenance checks precede seeding,
+  // and existing telemetry is backed up before registry and backfill publish together.
+  async initializeRegistry(): Promise<LoadedData> {
+    if (!this.initializing) {
+      this.initializing = (async () => {
+        const { data } = await this.load()
+        return data.registry
+          ? this.load()
+          : this.mutate({
+              kind: 'registry-import',
+              text: JSON.stringify(canonicalRegistry),
+              revision: data.revision
+            })
+      })()
+    }
+    try {
+      return structuredClone(await this.initializing)
+    } finally {
+      this.initializing = undefined
     }
   }
   async load(): Promise<LoadedData> {
@@ -111,17 +151,25 @@ export class TelemetryStore {
             'Live dataset disappeared. Files preserved; close PennyTel and restore it.'
           )
       }
-      if (live !== undefined && JSON.stringify(JSON.parse(live)) !== JSON.stringify(previous))
+      if (live !== undefined && live !== this.liveContents)
         throw new Error(
           'Live dataset changed outside PennyTel. Files preserved; close and reopen PennyTel.'
         )
+      if ((await this.readBackupState()) !== this.backupState)
+        throw new Error(
+          'Backup changed outside PennyTel. Files preserved; close and reopen PennyTel.'
+        )
       await mkdir(this.directory, { recursive: true, mode: 0o700 })
-      if (live !== undefined)
+      if (live !== undefined) {
         await this.atomicWrite(
           join(this.directory, 'telemetry.backup.json'),
           JSON.stringify(previous, null, 2)
         )
+        // Track our own rotation even if the following live replacement fails.
+        this.backupState = await this.readBackupState()
+      }
       await this.atomicWrite(this.path, JSON.stringify(next, null, 2))
+      this.liveContents = JSON.stringify(next, null, 2)
       this.awaitingFirstWrite = false
       this.data = next
       return this.load()
