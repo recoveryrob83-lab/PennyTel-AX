@@ -1,74 +1,95 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
-import { join } from 'path'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { join, resolve } from 'node:path'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import icon from '../../resources/icon.png?asset'
+import { TelemetryStore } from './store'
+import type { Mutation } from '../shared/types'
 
-function createWindow(): void {
-  // Create the browser window.
-  const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
-    show: false,
-    autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+// A dedicated directory keeps local QA separate from the operator's dataset.
+if (process.env.PENNYTEL_DATA_DIR) app.setPath('userData', resolve(process.env.PENNYTEL_DATA_DIR))
+app.setName('PennyTel')
+const locked = app.requestSingleInstanceLock()
+if (!locked) app.quit()
+else {
+  app.whenReady().then(() => {
+    electronApp.setAppUserModelId('com.pennyos.pennytel')
+    const store = new TelemetryStore(app.getPath('userData'))
+    const mainWindow = new BrowserWindow({
+      title: 'PennyTel',
+      width: 1440,
+      height: 960,
+      minWidth: 900,
+      minHeight: 640,
+      show: false,
+      autoHideMenuBar: true,
+      backgroundColor: '#10171e',
+      webPreferences: {
+        preload: join(__dirname, '../preload/index.js'),
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false
+      }
+    })
+    const handle = (channel: string, action: (...args: unknown[]) => unknown): void => {
+      ipcMain.handle(channel, (event, ...args) => {
+        if (
+          event.sender !== mainWindow.webContents ||
+          event.senderFrame !== mainWindow.webContents.mainFrame
+        )
+          throw new Error('Untrusted caller.')
+        return action(...args)
+      })
     }
+    handle('telemetry:load', () => store.load())
+    handle('telemetry:mutate', (command) => store.mutate(command as Mutation))
+    handle('telemetry:preview', (text) => {
+      if (typeof text !== 'string') throw new Error('Import must be text.')
+      return store.preview(text)
+    })
+    handle('telemetry:open', async () => {
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: 'Import PennyTel records',
+        properties: ['openFile'],
+        filters: [{ name: 'PennyTel JSON', extensions: ['json'] }]
+      })
+      if (result.canceled) return null
+      if ((await stat(result.filePaths[0])).size > 10_000_000)
+        throw new Error('Import exceeds the 10 MB limit.')
+      return readFile(result.filePaths[0], 'utf8')
+    })
+    handle('telemetry:export', async () => {
+      const { data } = await store.load()
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: 'Export PennyTel dataset',
+        defaultPath: `pennytel-${new Date().toISOString().slice(0, 10)}.json`,
+        filters: [{ name: 'JSON', extensions: ['json'] }]
+      })
+      if (result.canceled || !result.filePath) return null
+      if (
+        resolve(result.filePath) === store.path ||
+        resolve(result.filePath) === join(app.getPath('userData'), 'telemetry.backup.json')
+      )
+        throw new Error('Choose a path outside the live dataset and its backup.')
+      await writeFile(result.filePath, JSON.stringify(data, null, 2), {
+        encoding: 'utf8',
+        mode: 0o600
+      })
+      return result.filePath
+    })
+    mainWindow.on('ready-to-show', () => mainWindow.show())
+    mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    mainWindow.webContents.on('will-navigate', (event) => event.preventDefault())
+    mainWindow.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) =>
+      callback(false)
+    )
+    optimizer.watchWindowShortcuts(mainWindow)
+    if (is.dev && process.env.ELECTRON_RENDERER_URL)
+      mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+    else mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    app.on('second-instance', () => {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    })
   })
-
-  mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
-  })
-
-  mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
-    return { action: 'deny' }
-  })
-
-  // HMR for renderer base on electron-vite cli.
-  // Load the remote URL for development or the local html file for production.
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-  }
+  app.on('window-all-closed', () => app.quit())
 }
-
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
-  // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
-
-  // Default open or close DevTools by F12 in development
-  // and ignore CommandOrControl + R in production.
-  // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
-  app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window)
-  })
-
-  // IPC test
-  ipcMain.on('ping', () => console.log('pong'))
-
-  createWindow()
-
-  app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
-})
-
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
-})
-
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and require them here.
