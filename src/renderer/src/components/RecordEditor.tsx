@@ -160,15 +160,15 @@ export function RecordEditor({
           </p>
           {table === 'runs' && (
             <p className="notice">
-              Pricing is saved with the run using its exact model, provider, and start date. Enter
-              explicit zeroes for known-zero token counts. Changing model, provider, date, or
-              overrides selects a new snapshot.
+              Registry pricing uses stable identity and the run start date, pricing reference date,
+              or slice start date. Enter explicit zeroes for known-zero token counts. Explicitly
+              correcting model, provider, date, or overrides selects a new snapshot.
             </p>
           )}
           {table === 'pricing' && (
             <p className="notice">
-              Use published USD rates and an effective date. Existing run snapshots remain
-              unchanged; correct a historical run using its three rate overrides.
+              This edits legacy pricing. Use Model Registry for registered offers. Existing run
+              snapshots remain unchanged; correct a historical run using its three rate overrides.
             </p>
           )}
           <fieldset disabled={busy}>

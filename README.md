@@ -17,13 +17,13 @@ npm run build
 npm start
 ```
 
-Use Electron, not the renderer URL in a standalone browser. The renderer deliberately has no browser-storage fallback. No account, network connection, Google Sheet access, or API key is required. The notebook starts empty; there is no generated production telemetry or assumed model pricing.
+Use Electron, not the renderer URL in a standalone browser. The renderer deliberately has no browser-storage fallback. No account, network connection, Google Sheet access, or API key is required. The notebook starts without generated telemetry. The supplied canonical Model Registry is seeded locally with its published source metadata and pricing history.
 
 ## First workflow
 
-1. In **Pricing history**, add the provider's historical USD rates with an effective date, exact model, and provider.
+1. Inspect **Model Registry** for canonical models, provider offers, reasoning levels, benchmarks and dated pricing. Use **Import / update registry** to validate and install an updated JSON. **Pricing history** retains legacy user records with explicit registry precedence.
 2. In **Slice notebook**, create a bounded piece of work. Only an ID and title are required. Add project, task shape, ambiguity, risk, and workflow when known.
-3. Add implementation, criticism, repair, or other runs. A run needs an ID, slice, run type, and factory role. Record the model/provider, timestamps, and token counts to calculate cost. Enter explicit zeroes when usage is known to be zero.
+3. Add implementation, criticism, repair, or other runs. A run needs an ID, slice, run type, and factory role. Record model/provider identity and token counts to calculate cost. Registry pricing can use a run start timestamp, an explicit pricing reference date, or the slice start date. Enter explicit zeroes when usage is known to be zero.
 4. Add findings with distinct severity/category and links to discovery/repair runs. Add autonomous discoveries and update independent validation when evidence arrives.
 5. Use **Accept now** in an in-progress slice's editor to set Accepted and stamp the current time, then **Save slice**. Quality grade and preferred candidate remain your separate judgments. Edit acceptance with the local date/time control (timezone shown), or choose the explicit exact ISO-with-timezone option. Existing acceptance times disable Accept now until explicitly cleared; changing disposition retains acceptance history. Operator-measured time to acceptance is also supported.
 6. In **Compare**, group and filter runs, inspect the underlying evidence, and compare full accepted-slice economics. A slice must contain a run matching all active run filters to qualify; its cost still includes the full relevant lifecycle across all models and roles. Use **Export comparison** to save the current derived analysis separately from the raw dataset.
@@ -32,7 +32,7 @@ Every record can be edited. Deletion asks for confirmation and protects referenc
 
 ## Persistence and portability
 
-The Electron main process owns the dataset. It validates every transaction, serializes writes, checks revisions, writes a temporary file, flushes it, and atomically replaces `telemetry.json`. When a live revision exists, the previous revision is saved as `telemetry.backup.json`; the first save in a genuinely new profile creates only the live file. A single-instance lock prevents competing application instances from editing the same profile.
+The Electron main process owns the dataset, including the durable Model Registry. Startup seeds a missing registry through the same guarded transaction path without erasing telemetry. The seed is bundled into the application; an installed AppImage needs no repository docs directory. It validates every transaction, serializes writes, checks revisions, writes a temporary file, flushes it, and atomically replaces `telemetry.json`. When a live revision exists, the previous revision is saved as `telemetry.backup.json`; the first save in a genuinely new profile creates only the live file. A single-instance lock prevents competing application instances from editing the same profile.
 
 **Data & portability** shows the exact storage path. Default storage is Electron's per-user PennyTel application-data directory. `PENNYTEL_DATA_DIR=/absolute/path` selects another directory, useful for a portable dataset or isolated QA. Close PennyTel before manually replacing its data files. If a dataset cannot be read or validated, the app preserves it and refuses writes. To recover, close the app and restore a valid export or its previous-revision backup to `telemetry.json`.
 
@@ -45,7 +45,7 @@ Export a JSON dataset through the native save dialog. Import a JSON file or past
 ## Measurement conventions
 
 - Input tokens mean **fresh / noncached** input. Cached input is additional and may exceed fresh input. Cost is `(fresh × input rate + cached × cached rate + output × output rate) / 1,000,000`. Output tokens **include** reasoning tokens; reasoning is not billed twice.
-- Automatic pricing uses the latest effective date on or before the run's start date in UTC and an exact model/provider match. A run stores a price snapshot; catalog edits do not recalculate history. Edit/save an unpriced run after adding a matching price. All three rate overrides allow an explicit historical correction.
+- Registry pricing uses stable model/provider identity and the newest covering rate, with date preference: UTC run start → explicit pricing reference date → slice start date. Eligible unpriced runs backfill on registry installation/update and telemetry edits. Existing snapshots stay frozen. Legacy pricing remains readable with registry precedence; all three overrides remain an explicit run correction route. See [Model Registry](docs/model-registry.md) for matching, migration and snapshot provenance.
 - Missing data remains unknown. Partial totals show known cost and record coverage. No-rate or unknown-token runs are not treated as free. Cache ratio is `cached / (fresh + cached)`, token-weighted across runs with both counts known. A zero denominator stays unknown.
 - Run time is the sum of recorded wall times. Time to acceptance is operator-measured or elapsed from the first recorded run to the acceptance timestamp; concurrent runs are not summed into elapsed acceptance time.
 - Accepted-slice cost includes all candidates and roles that started by acceptance, plus undated runs. Without an acceptance timestamp it includes all runs and says so. A run crossing the acceptance boundary must have its timestamps corrected. Post-acceptance findings/discoveries remain in the slice evidence.

@@ -1,6 +1,15 @@
 import { fields } from './fields'
 import { applicablePrice } from './metrics'
 import {
+  backfillRegistry,
+  identityCandidates,
+  parseRegistry,
+  reconcileLegacyPricing,
+  registrySnapshot,
+  resolveIdentity,
+  validateRegistry
+} from './registry'
+import {
   emptyDataset,
   TABLES,
   type Dataset,
@@ -84,6 +93,11 @@ export function validateRecord(table: Table, value: unknown): asserts value is E
     fail(`${prefix}: ID must have no surrounding spaces and be at most 200 characters.`)
   if (table === 'runs') {
     const run = value as unknown as Run
+    for (const key of ['modelId', 'providerId'] as const) {
+      const id = run[key]
+      if (id !== undefined && (id.trim() !== id || id.length > 200))
+        fail(`${prefix}: invalid ${key}.`)
+    }
     if (run.startAt && run.endAt && Date.parse(run.endAt) < Date.parse(run.startAt))
       fail(`${prefix}: end timestamp precedes start.`)
     if (
@@ -110,12 +124,32 @@ export function validateRecord(table: Table, value: unknown): asserts value is E
               'rateSource',
               'inputRate',
               'cachedRate',
-              'outputRate'
+              'outputRate',
+              'modelId',
+              'providerId',
+              'offerId',
+              'registryRevision',
+              'referenceDate',
+              'referenceDateSource',
+              'cacheWriteRate'
             ].includes(k)
         ) ||
         ![p.inputRate, p.cachedRate, p.outputRate].every(nonnegative) ||
-        !['Catalog', 'Override'].includes(p.source) ||
+        !['Catalog', 'Override', 'Registry'].includes(p.source) ||
         (p.effectiveDate !== undefined && !validDate(p.effectiveDate)) ||
+        (p.cacheWriteRate !== undefined && !nonnegative(p.cacheWriteRate)) ||
+        (p.referenceDate !== undefined && !validDate(p.referenceDate)) ||
+        (p.registryRevision !== undefined &&
+          (!Number.isSafeInteger(p.registryRevision) || p.registryRevision < 0)) ||
+        (p.referenceDateSource !== undefined &&
+          !['run.startAt', 'run.pricingReferenceDate', 'slice.startDate'].includes(
+            p.referenceDateSource
+          )) ||
+        [p.modelId, p.providerId, p.offerId].some(
+          (v) =>
+            v !== undefined &&
+            (typeof v !== 'string' || !v.trim() || v.trim() !== v || v.length > 200)
+        ) ||
         typeof p.model !== 'string' ||
         typeof p.provider !== 'string' ||
         p.model !== (run.model ?? '') ||
@@ -127,6 +161,19 @@ export function validateRecord(table: Table, value: unknown): asserts value is E
             p.rateSource.length > 100_000))
       )
         fail(`${prefix}: invalid or mismatched pricing snapshot.`)
+      if (
+        p.source === 'Registry' &&
+        (!p.modelId ||
+          !p.providerId ||
+          !p.offerId ||
+          p.registryRevision === undefined ||
+          !p.referenceDate ||
+          !p.referenceDateSource ||
+          !p.effectiveDate ||
+          p.effectiveDate > p.referenceDate ||
+          !p.rateSource)
+      )
+        fail(`${prefix}: incomplete or invalid registry snapshot provenance.`)
       if (
         p.source === 'Catalog' &&
         (!run.startAt ||
@@ -153,8 +200,13 @@ export function validateDataset(value: unknown): asserts value is Dataset {
     (value.revision as number) < 0
   )
     fail('Unsupported dataset. Expected schemaVersion 1 and a nonnegative integer revision.')
-  if (Object.keys(value).some((k) => !['schemaVersion', 'revision', ...TABLES].includes(k)))
+  if (
+    Object.keys(value).some(
+      (k) => !['schemaVersion', 'revision', 'registry', ...TABLES].includes(k)
+    )
+  )
     fail('Dataset contains unknown top-level fields.')
+  if (value.registry !== undefined) validateRegistry(value.registry)
   for (const table of TABLES) {
     if (!Array.isArray(value[table])) fail(`Dataset must contain a ${table} array.`)
     const ids = new Set<string>()
@@ -212,6 +264,9 @@ export function snapshotRun(run: Run, data: Dataset, previous?: Run): Run {
     'model',
     'provider',
     'startAt',
+    'modelId',
+    'providerId',
+    'pricingReferenceDate',
     'inputRate',
     'cachedRate',
     'outputRate'
@@ -231,6 +286,23 @@ export function snapshotRun(run: Run, data: Dataset, previous?: Run): Run {
       source: 'Override'
     }
   } else {
+    if (data.registry) {
+      const identity = resolveIdentity(run, data.registry)
+      if (identity) {
+        next.modelId = identity.model.id
+        next.providerId = identity.provider.id
+        const snapshot = registrySnapshot(
+          next,
+          data.registry,
+          data.slices.find((s) => s.id === run.sliceId)
+        )
+        if (snapshot) next.priceSnapshot = snapshot
+        return next
+      }
+      // Ambiguous identity and explicit IDs never fall through to free-text pricing.
+      if (run.modelId || run.providerId || identityCandidates(run, data.registry).length)
+        return next
+    }
     const price = applicablePrice(run, data.pricing)
     if (price) {
       const { id, model, provider, effectiveDate, inputRate, cachedRate, outputRate, source } =
@@ -270,6 +342,8 @@ export function mergeImport(
   } catch {
     fail('Invalid JSON. Paste or select a PennyTel dataset export.')
   }
+  if (object(input) && input.kind === 'pennytel-model-registry')
+    fail('Use Model Registry to validate and install registry JSON.')
   if (object(input) && input.kind === 'pennytel-comparison')
     fail(
       'Comparison exports are derived analysis, not importable telemetry. Select an Export dataset JSON file instead.'
@@ -278,9 +352,17 @@ export function mergeImport(
   const incoming = { ...emptyDataset(), ...input, revision: 0 }
   // Check each record first, then relationships against the combined dataset.
   for (const key of Object.keys(incoming))
-    if (!['schemaVersion', 'revision', ...TABLES].includes(key))
+    if (!['schemaVersion', 'revision', 'registry', ...TABLES].includes(key))
       fail(`Unknown import field “${key}”.`)
-  const next = structuredClone(current)
+  let next = structuredClone(current)
+  if (incoming.registry !== undefined) {
+    validateRegistry(incoming.registry)
+    if (current.registry && canonical(incoming.registry) !== canonical(current.registry))
+      fail(
+        'Imported registry differs from the installed registry. Use Model Registry to update it explicitly, or omit registry to import telemetry only.'
+      )
+    next.registry = structuredClone(incoming.registry)
+  }
   const preview: ImportPreview = {
     counts: { slices: 0, runs: 0, findings: 0, discoveries: 0, pricing: 0 },
     skipped: 0
@@ -310,6 +392,7 @@ export function mergeImport(
   next.runs = next.runs.map((r) =>
     !current.runs.some((old) => old.id === r.id) && !r.priceSnapshot ? snapshotRun(r, next) : r
   )
+  next = backfillRegistry(next)
   validateDataset(next)
   return { data: next, preview }
 }
@@ -319,7 +402,29 @@ export function applyMutation(current: Dataset, command: Mutation): Dataset {
       'The dataset changed since this view loaded. Reload before saving; your draft is still open.'
     )
   let next = structuredClone(current)
-  if (command.kind === 'import') {
+  if (command.kind === 'registry-import') {
+    const registry = parseRegistry(command.text)
+    // Referenced IDs cannot disappear; retired entries can preserve their identity.
+    for (const run of current.runs) {
+      if (
+        current.registry &&
+        ((run.modelId &&
+          current.registry.models.some((m) => m.id === run.modelId) &&
+          !registry.models.some((m) => m.id === run.modelId)) ||
+          (run.providerId &&
+            current.registry.providers.some((p) => p.id === run.providerId) &&
+            !registry.providers.some((p) => p.id === run.providerId)) ||
+          (run.modelId &&
+            run.providerId &&
+            resolveIdentity(run, current.registry) &&
+            !resolveIdentity(run, registry)))
+      )
+        fail(
+          `Registry update removes identity referenced by run ${run.id}. Retain its model/provider offer (retired status is supported).`
+        )
+    }
+    next.registry = reconcileLegacyPricing(registry, current.pricing).registry
+  } else if (command.kind === 'import') {
     if (typeof command.text !== 'string') fail('Import must be text.')
     next = mergeImport(current, command.text).data
   } else if (command.kind === 'save' || command.kind === 'delete') {
@@ -361,6 +466,7 @@ export function applyMutation(current: Dataset, command: Mutation): Dataset {
       rows.splice(index, 1)
     }
   } else fail('Unknown operation.')
+  next = backfillRegistry(next)
   next.revision = current.revision + 1
   validateDataset(next)
   return next

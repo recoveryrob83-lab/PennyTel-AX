@@ -156,8 +156,8 @@ export function RunMetrics({ run }: { run: Run }): React.JSX.Element {
       </div>
       {issues.length > 0 && (
         <p className="notice">
-          Cost incomplete: {issues.join(' · ')}. Add pricing and edit/save this run to attach a
-          rate, or enter rate overrides.
+          Cost incomplete: {issues.join(' · ')}. Check registry identity, pricing dates, and token
+          counts; eligible unpriced runs resolve automatically.
         </p>
       )}
       {snapshot && (
@@ -168,7 +168,14 @@ export function RunMetrics({ run }: { run: Run }): React.JSX.Element {
             : 'effective date unknown'}{' '}
           · input {money(snapshot.inputRate)}, cached {money(snapshot.cachedRate)}, output{' '}
           {money(snapshot.outputRate)} per million tokens. Later catalog edits do not change these
-          rates. {snapshot.rateSource && <>Source: {snapshot.rateSource}</>}
+          rates.{' '}
+          {snapshot.source === 'Registry' && (
+            <>
+              Registry revision {snapshot.registryRevision} · {snapshot.offerId} · reference{' '}
+              {snapshot.referenceDate} from {snapshot.referenceDateSource}.{' '}
+            </>
+          )}{' '}
+          {snapshot.rateSource && <>Source: {snapshot.rateSource}</>}
         </p>
       )}
     </>

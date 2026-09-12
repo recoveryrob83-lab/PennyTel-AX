@@ -1,4 +1,5 @@
 import type { Dataset, Pricing as Price } from '../../../shared/types'
+import { reconcileLegacyPricing } from '../../../shared/registry'
 import { money } from '../../../shared/metrics'
 import { displayDate } from '../../../shared/presentation'
 import { Empty } from '../components/ui'
@@ -12,6 +13,22 @@ export function Pricing({
   onEdit: (price?: Price) => void
   onDelete: (price: Price) => void
 }): React.JSX.Element {
+  const reconciliation = data.registry
+    ? reconcileLegacyPricing(data.registry, data.pricing).records.map((record) => {
+        const installed = data.registry!.models.some((model) =>
+          model.offers.some((offer) =>
+            offer.pricingHistory.some((price) => price.legacyPricingIds?.includes(record.pricingId))
+          )
+        )
+        return record.status === 'migrated' && !installed
+          ? {
+              ...record,
+              status: 'migration available',
+              detail: 'Will migrate on the next registry installation; originals retained.'
+            }
+          : record
+      })
+    : []
   const unpriced = data.runs.filter((r) => !r.priceSnapshot).length
   return (
     <>
@@ -20,7 +37,8 @@ export function Pricing({
           <p className="eyebrow">Historical rates, durable costs</p>
           <h1>Pricing history</h1>
           <p className="muted">
-            Maintain the API-equivalent USD rates that were effective when the work ran.
+            Legacy pricing records are retained here. Manage registered model rates in Model
+            Registry.
           </p>
         </div>
         <button className="primary" onClick={() => onEdit()}>
@@ -28,15 +46,16 @@ export function Pricing({
         </button>
       </div>
       <div className="notice">
-        <strong>Runs keep a snapshot.</strong> On save, the latest price effective on or before the
-        run’s UTC start date is selected by exact model and provider. Editing a price affects future
-        snapshots. Use a run’s three rate overrides for an explicit historical correction.
+        <strong>Registry offers take precedence.</strong> Equivalent legacy rates are reconciled;
+        safe earlier history is migrated when a registry is installed. Conflicting rows stay here
+        for review. Exact legacy lookup remains available only for model/provider pairs without a
+        registry offer. Existing snapshots retain their evidence.
       </div>
       {unpriced > 0 && (
         <p className="notice">
-          {unpriced} {unpriced === 1 ? 'run has' : 'runs have'} no pricing snapshot. After adding a
-          matching price, edit and save those runs to attach it. Rates require exact model,
-          provider, and a start timestamp.
+          {unpriced} {unpriced === 1 ? 'run has' : 'runs have'} no pricing snapshot. Registry
+          installation and telemetry edits backfill eligible runs automatically. Missing or
+          ambiguous identity and missing dates remain unresolved.
         </p>
       )}
       <section className="panel">
@@ -76,6 +95,12 @@ export function Pricing({
                         <strong>{p.model}</strong>
                         <small>{p.provider}</small>
                         {p.source && <small className="preserve">Source: {p.source}</small>}
+                        {reconciliation.find((r) => r.pricingId === p.id) && (
+                          <small>
+                            Registry: {reconciliation.find((r) => r.pricingId === p.id)!.status} ·{' '}
+                            {reconciliation.find((r) => r.pricingId === p.id)!.detail}
+                          </small>
+                        )}
                         {p.notes && <small className="preserve">{p.notes}</small>}
                       </td>
                       <td>

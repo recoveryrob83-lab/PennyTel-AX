@@ -18,7 +18,7 @@ Per Issue #1, there is no production dataset and schema v1 is corrected directly
 }
 ```
 
-Exports always contain all arrays. Imports require `schemaVersion: 1` and may omit empty arrays and revision. Imported revisions are ignored; local revision increments on a successful transaction. Records have stable string IDs unique within their table (1–200 characters, no surrounding whitespace). Unknown fields, null, blank strings, invalid enum values, nonfinite/negative numbers, duplicate IDs within a batch, and missing/cross-slice references are rejected. Optional fields should be omitted when unknown. String fields are limited to 100,000 characters; imports to 10 MB.
+Exports always contain all arrays and the installed optional `registry` object. The [Model Registry contract](model-registry.md) defines this backward-compatible v1 extension, validated registry import/update, stable run IDs and migration precedence. Imports require `schemaVersion: 1` and may omit empty arrays and revision. Imported revisions are ignored; local revision increments on a successful transaction. Records have stable string IDs unique within their table (1–200 characters, no surrounding whitespace). Unknown fields, null, blank strings, invalid enum values, nonfinite/negative numbers, duplicate IDs within a batch, and missing/cross-slice references are rejected. Optional fields should be omitted when unknown. String fields are limited to 100,000 characters; imports to 10 MB.
 
 Import merges all arrays as one transaction. A child may refer to a parent already stored or supplied in the same batch. Identical records are skipped by value, independent of JSON key order. Conflicting existing IDs reject the entire import. Use the record editor for corrections; imports never overwrite stored history. Reimporting an exported dataset is idempotent. Raw batches that omit subsequently attached price snapshots may conflict with their stored versions; use the current export when retrying such records.
 
@@ -60,7 +60,7 @@ Cost, meter burn, repair passes, and validated autonomous discovery count are de
 
 Required: `id`, `sliceId`, `runType` (free text), `role`.
 
-Optional strings: `candidate`, `model`, `modelFamily`, `provider`, `orchestratorModel`, `notes`.
+Optional strings: `candidate`, `model`, `modelFamily`, `provider`, `orchestratorModel`, `notes`. Optional stable identity: `modelId`, `providerId` (1–200 characters, no surrounding whitespace). Optional `pricingReferenceDate` is a valid `YYYY-MM-DD` date.
 
 | Field                                   | Values / units                                                               |
 | --------------------------------------- | ---------------------------------------------------------------------------- |
@@ -88,11 +88,11 @@ Inferred burn is `usageBefore - usageAfter` when both are known, after is no gre
 
 ### Saved run pricing
 
-`priceSnapshot` is optional in imported runs and present in priced exports. When omitted for a new run, the app attaches applicable catalog pricing or the three explicit overrides. It never retroactively attaches prices to unrelated existing runs when a catalog entry is added.
+`priceSnapshot` is optional in imported runs and present in priced exports. When omitted for a new run, the app attaches applicable registry pricing or the three explicit overrides. Registry installation/update and telemetry transactions backfill eligible existing unpriced runs. Existing snapshots are never replaced by registry changes. Exact legacy catalog pricing remains a compatibility fallback only for model/provider pairs absent from the registry.
 
-Snapshot fields: `model`, `provider`, `effectiveDate`, `inputRate`, `cachedRate`, `outputRate`, `source` (`Catalog` or `Override`), optional `pricingId`, and optional `rateSource` (the catalog entry's source at attachment time). Snapshot model/provider must match the run (empty only when an override has no model/provider recorded). Catalog snapshots require a run date and cannot have an effective date after it. `pricingId` is historical provenance, not a live foreign key: deleting a catalog entry leaves its snapshots intact. Imported snapshots retain original rates/source even when the catalog has changed.
+Snapshot fields: `model`, `provider`, `effectiveDate`, `inputRate`, `cachedRate`, `outputRate`, `source` (`Catalog`, `Override` or `Registry`), optional `pricingId`, and optional `rateSource` (the catalog entry's source at attachment time). Snapshot model/provider must match the run (empty only when an override has no model/provider recorded). Catalog snapshots require a run date and cannot have an effective date after it. `pricingId` is historical provenance, not a live foreign key: deleting a catalog entry leaves its snapshots intact. Imported snapshots retain original rates/source even when the catalog has changed.
 
-Interactive save always resolves snapshots in the main process. An existing snapshot stays fixed on token-count or note edits. Model, provider, start timestamp, or override changes cause re-selection. All three overrides are the explicit correction route. Undated overrides omit `effectiveDate`; the UI identifies the date as unknown. Catalog snapshots always require an effective date.
+Interactive save always resolves snapshots in the main process. An existing snapshot stays fixed on token-count or note edits. Explicit model, provider, stable ID, start timestamp, pricing reference date, or override corrections cause re-selection. All three overrides are the explicit correction route. Undated overrides omit `effectiveDate`; the UI identifies the date as unknown. Catalog snapshots always require an effective date. Registry snapshots additionally retain `modelId`, `providerId`, `offerId`, `registryRevision`, `referenceDate`, `referenceDateSource`, `rateSource`, and optional `cacheWriteRate`. They do not require a run timestamp: the reference can come from `pricingReferenceDate` or `slice.startDate`. See the registry contract for exclusive pricing end dates and immutable evidence rules.
 
 ```
 cost = (inputTokens * inputRate
@@ -139,7 +139,7 @@ Optional strings: `runId`, `model`, `discoveryType`, `validatedBy`, `disposition
 
 Required: `id`, `model`, `provider`, `effectiveDate`, `inputRate`, `cachedRate`, `outputRate`. Optional: `source` (provider reference/link) and separate `notes` (context). Source is also retained as `rateSource` in new catalog snapshots.
 
-Rates are nonnegative USD per million tokens. Only one price may exist for the same exact model, provider, and UTC effective date. Strings match exactly, including case. The operator supplies historical prices; the app does not fetch or guess them.
+Rates are nonnegative USD per million tokens. Only one price may exist for the same exact model, provider, and UTC effective date. Strings match exactly, including case. The operator supplies historical prices; the app does not fetch or guess them. This table is now the retained legacy pricing archive/compatibility path; Model Registry is authoritative for registered offers. See [migration and precedence](model-registry.md#legacy-pricing-precedence-and-migration).
 
 ## Analysis boundaries
 

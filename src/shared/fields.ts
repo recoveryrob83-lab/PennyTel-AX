@@ -103,6 +103,18 @@ export const fields: Record<Table, Field[]> = {
     },
     { key: 'candidate', label: 'Candidate / implementation' },
     { key: 'model', label: 'Exact model' },
+    {
+      key: 'modelId',
+      label: 'Registry model ID',
+      group: 'Registry identity',
+      hint: 'Optional stable ID; takes precedence over the display name. Clear it to reconcile a corrected name.'
+    },
+    {
+      key: 'providerId',
+      label: 'Registry service ID',
+      group: 'Registry identity',
+      hint: 'Optional provider ID from Model Registry; takes precedence over the provider display name.'
+    },
     { key: 'modelFamily', label: 'Model family' },
     { key: 'provider', label: 'Provider' },
     { key: 'thinking', label: 'Thinking level', options: thinking },
@@ -136,7 +148,14 @@ export const fields: Record<Table, Field[]> = {
       label: 'Start timestamp',
       type: 'timestamp',
       group: 'Time & usage',
-      hint: 'ISO timestamp with timezone, e.g. 2026-09-11T15:00:00-05:00. Required for automatic pricing.'
+      hint: 'ISO timestamp with timezone, e.g. 2026-09-11T15:00:00-05:00. Pricing uses its UTC date when present.'
+    },
+    {
+      key: 'pricingReferenceDate',
+      label: 'Pricing reference date',
+      type: 'date',
+      group: 'Time & usage',
+      hint: 'Used when start timestamp is unknown; otherwise falls back to the slice start date.'
     },
     { key: 'endAt', label: 'End timestamp', type: 'timestamp', group: 'Time & usage' },
     number(
