@@ -1,0 +1,473 @@
+{
+  "kind": "pennytel-model-registry",
+  "schemaVersion": 1,
+  "registryRevision": 1,
+  "updatedAt": "2026-09-12",
+  "description": "Canonical PennyTel model registry. Model identity, makers, provider offers, reasoning/quality settings, benchmark evidence, and pricing history live here. Experiment telemetry should reference stable model/provider IDs rather than carry reusable model metadata.",
+  "pricingResolutionPolicy": {
+    "rule": "Choose the newest pricingHistory entry whose effectiveFrom is on or before the run pricing-reference date and whose effectiveTo is null or after that date.",
+    "snapshotOnUse": true,
+    "historicalSnapshotsImmutable": true,
+    "pricingReferencePreference": [
+      "run.startAt",
+      "run.pricingReferenceDate",
+      "slice.startDate"
+    ],
+    "notes": "Registry changes may affect unresolved/unpriced runs, but must never rewrite a run that already has a frozen price snapshot."
+  },
+  "makers": [
+    {
+      "id": "openai",
+      "name": "OpenAI"
+    }
+  ],
+  "providers": [
+    {
+      "id": "openai-api",
+      "name": "OpenAI API",
+      "type": "first_party_api"
+    }
+  ],
+  "models": [
+    {
+      "id": "openai:gpt-6-astra",
+      "canonicalName": "GPT-6 Astra",
+      "apiModelId": "gpt-6-astra",
+      "makerId": "openai",
+      "family": "GPT-6",
+      "tier": "Astra",
+      "aliases": [
+        "Astra",
+        "Tropy"
+      ],
+      "status": "active",
+      "reasoning": {
+        "supported": true,
+        "effortLevels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "context": {
+        "windowTokens": 1050000,
+        "maxOutputTokens": 128000,
+        "knowledgeCutoff": "2026-04-30"
+      },
+      "modalities": {
+        "textInput": true,
+        "textOutput": true,
+        "imageInput": true,
+        "audioInput": false,
+        "videoInput": false
+      },
+      "capabilities": [
+        "reasoning",
+        "coding",
+        "computer_use",
+        "research",
+        "function_calling",
+        "structured_outputs",
+        "streaming"
+      ],
+      "benchmarks": [
+        {
+          "name": "Agents' Last Exam",
+          "version": null,
+          "category": "computer_use",
+          "score": 59.3,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-6-astra/"
+        },
+        {
+          "name": "OSWorld 2.0",
+          "version": "2026.08.08 offline set",
+          "category": "computer_use",
+          "score": 72.6,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-6-astra/"
+        },
+        {
+          "name": "Terminal-Bench",
+          "version": "4.0",
+          "category": "coding",
+          "score": 57.9,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-6-astra/"
+        },
+        {
+          "name": "DeepSWE",
+          "version": "1.1",
+          "category": "coding",
+          "score": 74.1,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-6-astra/"
+        },
+        {
+          "name": "GPQA Diamond",
+          "version": null,
+          "category": "academic",
+          "score": 96.0,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-6-astra/"
+        },
+        {
+          "name": "AutomationBench",
+          "version": null,
+          "category": "professional",
+          "score": 41.4,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-6-astra/"
+        }
+      ],
+      "offers": [
+        {
+          "id": "openai:gpt-6-astra@openai-api",
+          "providerId": "openai-api",
+          "providerModelId": "gpt-6-astra",
+          "status": "active",
+          "pricingHistory": [
+            {
+              "effectiveFrom": "2026-09-03",
+              "effectiveTo": null,
+              "currency": "USD",
+              "unit": "per_1m_tokens",
+              "inputUsd": 10.0,
+              "cachedInputUsd": 1.0,
+              "cacheWriteUsd": 12.5,
+              "outputUsd": 50.0,
+              "source": "https://developers.openai.com/api/docs/models/gpt-6-astra"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "openai:gpt-5.6-sol",
+      "canonicalName": "GPT-5.6 Sol",
+      "apiModelId": "gpt-5.6-sol",
+      "makerId": "openai",
+      "family": "GPT-5.6",
+      "tier": "Sol",
+      "aliases": [
+        "Sol",
+        "Penny",
+        "gpt-5.6"
+      ],
+      "status": "active",
+      "reasoning": {
+        "supported": true,
+        "effortLevels": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "context": {
+        "windowTokens": 1050000,
+        "maxOutputTokens": 128000,
+        "knowledgeCutoff": "2026-02-16"
+      },
+      "modalities": {
+        "textInput": true,
+        "textOutput": true,
+        "imageInput": true,
+        "audioInput": false,
+        "videoInput": false
+      },
+      "capabilities": [
+        "reasoning",
+        "coding",
+        "function_calling",
+        "structured_outputs",
+        "streaming"
+      ],
+      "benchmarks": [
+        {
+          "name": "Terminal-Bench",
+          "version": "4.0",
+          "category": "coding",
+          "score": 37.3,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-6-astra/"
+        },
+        {
+          "name": "DeepSWE",
+          "version": "1.1",
+          "category": "coding",
+          "score": 72.7,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-6-astra/"
+        },
+        {
+          "name": "GPQA Diamond",
+          "version": null,
+          "category": "academic",
+          "score": 94.6,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-6-astra/"
+        },
+        {
+          "name": "OSWorld 2.0",
+          "version": "2026.08.08 offline set",
+          "category": "computer_use",
+          "score": 65.7,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-6-astra/"
+        },
+        {
+          "name": "AutomationBench",
+          "version": null,
+          "category": "professional",
+          "score": 18.1,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-6-astra/"
+        }
+      ],
+      "offers": [
+        {
+          "id": "openai:gpt-5.6-sol@openai-api",
+          "providerId": "openai-api",
+          "providerModelId": "gpt-5.6-sol",
+          "status": "active",
+          "pricingHistory": [
+            {
+              "effectiveFrom": "2026-08-21",
+              "effectiveTo": null,
+              "currency": "USD",
+              "unit": "per_1m_tokens",
+              "inputUsd": 4.0,
+              "cachedInputUsd": 0.4,
+              "cacheWriteUsd": 5.0,
+              "outputUsd": 20.0,
+              "source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "openai:gpt-5.6-terra",
+      "canonicalName": "GPT-5.6 Terra",
+      "apiModelId": "gpt-5.6-terra",
+      "makerId": "openai",
+      "family": "GPT-5.6",
+      "tier": "Terra",
+      "aliases": [
+        "Terra"
+      ],
+      "status": "active",
+      "reasoning": {
+        "supported": true,
+        "effortLevels": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "context": {
+        "windowTokens": 1050000,
+        "maxOutputTokens": 128000,
+        "knowledgeCutoff": "2026-02-16"
+      },
+      "modalities": {
+        "textInput": true,
+        "textOutput": true,
+        "imageInput": true,
+        "audioInput": false,
+        "videoInput": false
+      },
+      "capabilities": [
+        "reasoning",
+        "coding",
+        "function_calling",
+        "structured_outputs",
+        "streaming"
+      ],
+      "benchmarks": [
+        {
+          "name": "Agents' Last Exam",
+          "version": null,
+          "category": "professional",
+          "score": 50.4,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-5-6/"
+        },
+        {
+          "name": "DeepSWE",
+          "version": "1.1",
+          "category": "coding",
+          "score": 69.6,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-5-6/"
+        },
+        {
+          "name": "Terminal-Bench",
+          "version": "2.1",
+          "category": "coding",
+          "score": 87.4,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-5-6/"
+        },
+        {
+          "name": "GPQA Diamond",
+          "version": null,
+          "category": "academic",
+          "score": 92.9,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-5-6/"
+        }
+      ],
+      "offers": [
+        {
+          "id": "openai:gpt-5.6-terra@openai-api",
+          "providerId": "openai-api",
+          "providerModelId": "gpt-5.6-terra",
+          "status": "active",
+          "pricingHistory": [
+            {
+              "effectiveFrom": "2026-07-30",
+              "effectiveTo": null,
+              "currency": "USD",
+              "unit": "per_1m_tokens",
+              "inputUsd": 2.0,
+              "cachedInputUsd": 0.2,
+              "cacheWriteUsd": 2.5,
+              "outputUsd": 12.0,
+              "source": "https://developers.openai.com/api/docs/models/gpt-5.6-terra"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "openai:gpt-5.6-luna",
+      "canonicalName": "GPT-5.6 Luna",
+      "apiModelId": "gpt-5.6-luna",
+      "makerId": "openai",
+      "family": "GPT-5.6",
+      "tier": "Luna",
+      "aliases": [
+        "Luna"
+      ],
+      "status": "active",
+      "reasoning": {
+        "supported": true,
+        "effortLevels": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "context": {
+        "windowTokens": 1050000,
+        "maxOutputTokens": 128000,
+        "knowledgeCutoff": "2026-02-16"
+      },
+      "modalities": {
+        "textInput": true,
+        "textOutput": true,
+        "imageInput": true,
+        "audioInput": false,
+        "videoInput": false
+      },
+      "capabilities": [
+        "reasoning",
+        "coding",
+        "function_calling",
+        "structured_outputs",
+        "streaming"
+      ],
+      "benchmarks": [
+        {
+          "name": "Agents' Last Exam",
+          "version": null,
+          "category": "professional",
+          "score": 50.3,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-5-6/"
+        },
+        {
+          "name": "Artificial Analysis Coding Agent Index",
+          "version": "1.1",
+          "category": "coding",
+          "score": 74.6,
+          "unit": "index",
+          "source": "https://openai.com/index/gpt-5-6/"
+        },
+        {
+          "name": "SWE-Bench Pro",
+          "version": null,
+          "category": "coding",
+          "score": 62.7,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-5-6/"
+        },
+        {
+          "name": "DeepSWE",
+          "version": "1.1",
+          "category": "coding",
+          "score": 67.2,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-5-6/"
+        },
+        {
+          "name": "Terminal-Bench",
+          "version": "2.1",
+          "category": "coding",
+          "score": 84.7,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-5-6/"
+        },
+        {
+          "name": "GPQA Diamond",
+          "version": null,
+          "category": "academic",
+          "score": 92.3,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-5-6/"
+        },
+        {
+          "name": "OSWorld 2.0",
+          "version": null,
+          "category": "computer_use",
+          "score": 45.6,
+          "unit": "percent",
+          "source": "https://openai.com/index/gpt-5-6/"
+        }
+      ],
+      "offers": [
+        {
+          "id": "openai:gpt-5.6-luna@openai-api",
+          "providerId": "openai-api",
+          "providerModelId": "gpt-5.6-luna",
+          "status": "active",
+          "pricingHistory": [
+            {
+              "effectiveFrom": "2026-07-30",
+              "effectiveTo": null,
+              "currency": "USD",
+              "unit": "per_1m_tokens",
+              "inputUsd": 0.2,
+              "cachedInputUsd": 0.02,
+              "cacheWriteUsd": 0.25,
+              "outputUsd": 1.2,
+              "source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
