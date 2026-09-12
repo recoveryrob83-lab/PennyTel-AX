@@ -1,6 +1,28 @@
-node_modules
-dist
-out
-.DS_Store
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+
+# Test / coverage artifacts
+coverage/
+playwright-report/
+test-results/
+
+# Vite / TypeScript caches
+.vite/
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Local caches / logs
 .eslintcache
 *.log*
+
+# OS junk
+.DS_Store
+Thumbs.db
