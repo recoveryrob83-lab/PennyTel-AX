@@ -411,12 +411,14 @@ scripts exercise the real main/preload/renderer/filesystem path.
 - Registry evolution should use the complete JSON parse/validate/update path
   in `src/shared/registry.ts` and `registry-import`; referenced IDs and frozen
   snapshot provenance constrain replacement documents.
-- New comparison dimensions should extend the shared derivation in
-  `src/shared/configuration.ts` first, then `GroupBy`/filter labels, keyed cohort
-  selection, shared `compareData`, and the corresponding analysis export, with
-  UI and unit-test coverage kept on the same path. Do not duplicate
-  model/thinking identity composition in the renderer or persist a redundant
-  configuration field without an authoritative schema change.
+- New model-identity-derived comparison dimensions should extend the shared
+  derivation in `src/shared/configuration.ts` first, then `GroupBy`/filter
+  labels, keyed cohort selection, shared `compareData`, and the corresponding
+  analysis export, with UI and unit-test coverage kept on the same path. Other
+  comparison dimensions should continue to use their existing source or
+  analytical ownership. Do not duplicate model/thinking identity composition
+  in the renderer or persist a redundant configuration field without an
+  authoritative schema change.
 - New pages should be routed in `App.tsx` and consume the loaded `Dataset`
   through existing callbacks; persistence authority should not move into page
   components.
