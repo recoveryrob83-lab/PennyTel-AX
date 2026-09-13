@@ -4,14 +4,129 @@ import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
 import { Compare } from '../src/renderer/src/pages/Compare'
-import { comparisonFixture } from './fixtures'
+import { comparisonFixture, runFixture } from './fixtures'
 import { configurationFixture } from './configuration-fixtures'
 import { modelConfiguration } from '../src/shared/configuration'
 import App from '../src/renderer/src/App'
 import { version } from '../package.json'
+import {
+  compareData,
+  MAX_COMPARISON_CANDIDATES,
+  type ComparisonRequest
+} from '../src/shared/comparison'
 
 afterEach(cleanup)
 describe('comparison UI uses shared cohort context', () => {
+  it('selects 2 then 3+ configurations, scopes evidence, retains empty candidates and exports the shared workspace', async () => {
+    const user = userEvent.setup()
+    const data = configurationFixture()
+    data.runs[0].runType = 'Verification'
+    data.runs[1].runType = 'Re-critic'
+    data.runs[0].filesChanged = 0
+    data.runs[0].runtimeTested = false
+    const exportComparison = vi.fn().mockResolvedValue('/qa/workspace.json')
+    window.pennytel = { ...window.pennytel, exportComparison }
+    const onOpenRun = vi.fn()
+    render(<Compare data={data} onOpenRun={onOpenRun} onOpenSlice={vi.fn()} />)
+    const labels = [
+      'GPT-6 Astra — Low',
+      'GPT-5.6 Luna — Max',
+      'GPT-6 Astra — ExtraHigh / XHigh',
+      'GPT-6 Astra — Unknown'
+    ]
+    for (const label of labels.slice(0, 2))
+      await user.click(screen.getByRole('checkbox', { name: label }))
+    const table = within(screen.getByRole('region', { name: 'Selected candidate comparison' }))
+    expect(table.getAllByRole('columnheader')).toHaveLength(3)
+    for (const label of labels.slice(2))
+      await user.click(screen.getByRole('checkbox', { name: label }))
+    expect(
+      table
+        .getAllByRole('columnheader')
+        .slice(1)
+        .map((cell) => cell.textContent)
+    ).toEqual(labels.map((label, i) => `${label}${i ? 1 : 2} runs`))
+    await user.click(screen.getByRole('checkbox', { name: 'Critic (role: Critic)' }))
+    expect(table.getByRole('columnheader', { name: /GPT-6 Astra — Low/ })).toHaveTextContent(
+      '0 runs / no evidence'
+    )
+    expect(table.getByRole('row', { name: /^API-equivalent cost/ })).toHaveTextContent('Unknown')
+    await user.click(screen.getByRole('checkbox', { name: 'Implementation (role: Implementer)' }))
+    expect(table.getByRole('columnheader', { name: /GPT-6 Astra — Low/ })).toHaveTextContent(
+      '2 runs'
+    )
+    await user.click(screen.getByRole('button', { name: 'Clear stage scope' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Recorded run type: Verification' }))
+    await user.click(screen.getByText('Narrow the cohort'))
+    await user.selectOptions(screen.getByLabelText('Filter Factory role'), 'Implementer')
+    await user.selectOptions(screen.getByLabelText('Group runs by'), 'role')
+    await user.selectOptions(screen.getByLabelText('Order groups'), 'time')
+    await user.click(
+      screen.getByRole('button', { name: /Implementer.*1\/1 priced/, pressed: false })
+    )
+    await user.click(screen.getByRole('button', { name: 'Export comparison' }))
+    const request = exportComparison.mock.calls[0][0] as ComparisonRequest
+    expect(request.context).toEqual({
+      filters: { role: 'Implementer' },
+      groupBy: 'role',
+      sort: 'time',
+      selectedGroup: 'Implementer',
+      selectedCandidates: [0, 4, 2, 3].map((i) => modelConfiguration(data, data.runs[i]).key),
+      stageScopes: [{ kind: 'runType', value: 'Verification' }]
+    })
+    expect(
+      compareData(data, request.context).candidates.map((c) => c.runs.map((r) => r.id))
+    ).toEqual([['low'], [], [], []])
+    expect(table.getByRole('row', { name: /^Files changed/ })).toHaveTextContent('01/1 recorded')
+    expect(table.getByRole('row', { name: /^Runtime tested/ })).toHaveTextContent('No: 1')
+    await user.click(screen.getByText('Inspect evidence · GPT-6 Astra — Low · 1 runs'))
+    const evidence = screen
+      .getByText('Inspect evidence · GPT-6 Astra — Low · 1 runs')
+      .closest('details')!
+    await user.click(within(evidence).getByRole('button', { name: 'Verification' }))
+    expect(onOpenRun).toHaveBeenCalledWith(data.runs[0])
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }))
+    expect(screen.getByRole('checkbox', { name: labels[0] })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Recorded run type: Verification' })).toBeChecked()
+  })
+  it('keeps colliding candidate labels keyed independently and offers no inferred stage', async () => {
+    const user = userEvent.setup()
+    const data = configurationFixture()
+    data.runs = ['a', 'b'].map((id) => ({
+      ...data.runs[0],
+      id,
+      modelId: `missing-${id}`,
+      model: 'Same'
+    }))
+    render(<Compare data={data} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
+    for (const [i, run] of data.runs.entries()) {
+      const option = screen.getByRole('checkbox', { name: `Same — Low [${i + 1}]` })
+      expect(option).toHaveAttribute('value', modelConfiguration(data, run).key)
+      await user.click(option)
+    }
+    expect(screen.getAllByRole('checkbox', { checked: true })).toHaveLength(2)
+    expect(
+      screen.queryByRole('checkbox', { name: /Re-critic|Verification/ })
+    ).not.toBeInTheDocument()
+    const region = within(screen.getByRole('region', { name: 'Selected candidate comparison' }))
+    expect(region.getAllByRole('columnheader')).toHaveLength(3)
+  })
+  it('bounds candidate controls while allowing deselection at the limit', async () => {
+    const user = userEvent.setup()
+    const data = configurationFixture()
+    data.runs = Array.from({ length: MAX_COMPARISON_CANDIDATES + 1 }, (_, i) =>
+      runFixture({ id: String(i), model: `Model ${i}` })
+    )
+    render(<Compare data={data} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
+    for (let i = 0; i < MAX_COMPARISON_CANDIDATES; i++)
+      await user.click(screen.getByRole('checkbox', { name: `Model ${i} — High` }))
+    const last = screen.getByRole('checkbox', {
+      name: `Model ${MAX_COMPARISON_CANDIDATES} — High`
+    })
+    expect(last).toBeDisabled()
+    await user.click(screen.getByRole('checkbox', { name: 'Model 0 — High' }))
+    expect(last).toBeEnabled()
+  })
   it('renders distinct colliding filter and group labels and preserves them after filtering', async () => {
     const user = userEvent.setup()
     const data = configurationFixture()
@@ -100,6 +215,7 @@ describe('comparison UI uses shared cohort context', () => {
   })
 
   it('keeps the canonical package version visible across ordinary pages', async () => {
+    expect(version).toBe('0.1.2')
     const user = userEvent.setup()
     window.pennytel = {
       load: vi.fn().mockResolvedValue({ data: configurationFixture(), path: '/qa/telemetry.json' }),
