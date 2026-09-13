@@ -9,6 +9,7 @@ import {
 import { mergeImport, validateDataset } from '../src/shared/data'
 import { emptyDataset } from '../src/shared/types'
 import { comparisonFixture, runFixture } from './fixtures'
+import { MAX_DERIVED_IDENTITY_LENGTH } from '../src/shared/configuration'
 
 const context: ComparisonContext = {
   filters: { model: 'QA Astra', role: 'Implementer' },
@@ -16,6 +17,37 @@ const context: ComparisonContext = {
   sort: 'cost'
 }
 describe('bounded comparison and non-importable analysis export', () => {
+  it('bounds derived requests separately while retaining source field limits', () => {
+    for (const [dimension, limit] of [
+      ['modelConfiguration', MAX_DERIVED_IDENTITY_LENGTH],
+      ['canonicalModel', MAX_DERIVED_IDENTITY_LENGTH],
+      ['modelFamily', MAX_DERIVED_IDENTITY_LENGTH],
+      ['model', 100_000]
+    ] as const) {
+      const request = {
+        revision: 0,
+        context: {
+          filters: { [dimension]: 'x'.repeat(limit) },
+          groupBy: dimension,
+          sort: 'label',
+          selectedGroup: 'x'.repeat(limit)
+        }
+      }
+      expect(() => validateComparisonRequest(request)).not.toThrow()
+      expect(() =>
+        validateComparisonRequest({
+          ...request,
+          context: { ...request.context, selectedGroup: 'x'.repeat(limit + 1) }
+        })
+      ).toThrow('selection')
+      expect(() =>
+        validateComparisonRequest({
+          ...request,
+          context: { ...request.context, filters: { [dimension]: 'x'.repeat(limit + 1) } }
+        })
+      ).toThrow('filter')
+    }
+  })
   it('qualifies only matching slices while retaining other models’ full acceptance lifecycle', () => {
     const data = comparisonFixture()
     validateDataset(data)

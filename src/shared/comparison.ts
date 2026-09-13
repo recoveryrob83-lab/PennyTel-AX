@@ -1,5 +1,13 @@
 import type { Dataset, Discovery, Finding, Role, Run, Slice } from './types'
 import {
+  derivedRunIdentity,
+  derivedRunLabels,
+  derivedPresentationLabels,
+  MAX_DERIVED_IDENTITY_LENGTH,
+  type ComparisonIdentity,
+  type DerivedRunDimension
+} from './configuration'
+import {
   acceptanceRuns,
   groupLabels,
   groupRuns,
@@ -21,6 +29,7 @@ export const sliceFilterLabels = {
   qualityGrade: 'Product quality grade'
 } as const
 export const runFilterLabels = {
+  ...derivedRunLabels,
   model: 'Exact model',
   thinking: 'Thinking level',
   role: 'Factory role',
@@ -42,6 +51,38 @@ export interface ComparisonRequest {
 }
 const sliceKeys = Object.keys(sliceFilterLabels) as (keyof typeof sliceFilterLabels)[]
 const runKeys = Object.keys(runFilterLabels) as (keyof typeof runFilterLabels)[]
+export function runFilterIdentity(
+  data: Dataset,
+  run: Run,
+  key: keyof typeof runFilterLabels
+): ComparisonIdentity {
+  if (key in derivedRunLabels) return derivedRunIdentity(data, run, key as DerivedRunDimension)
+  const value = run[key as Exclude<keyof typeof runFilterLabels, DerivedRunDimension>] ?? ''
+  return { key: value, label: value }
+}
+
+export function runFilterOptions(
+  data: Dataset,
+  key: keyof typeof runFilterLabels
+): ComparisonIdentity[] {
+  const labels =
+    key in derivedRunLabels
+      ? derivedPresentationLabels(data, key as DerivedRunDimension)
+      : undefined
+  return [
+    ...new Map(
+      data.runs.map((run) => {
+        const identity = runFilterIdentity(data, run, key)
+        return [
+          identity.key,
+          { ...identity, label: labels?.get(identity.key) ?? identity.label }
+        ] as const
+      })
+    ).values()
+  ]
+    .filter((identity) => identity.key !== '')
+    .sort((a, b) => a.label.localeCompare(b.label))
+}
 const roles = ['Orchestrator', 'Context Steward', 'Implementer', 'Critic', 'Repair'] as const
 const severities = ['P0', 'P1', 'P2'] as const
 const categories = [
@@ -81,14 +122,16 @@ export function validateComparisonRequest(value: unknown): asserts value is Comp
     throw new Error('Invalid comparison context.')
   if (
     context.selectedGroup !== undefined &&
-    (typeof context.selectedGroup !== 'string' || context.selectedGroup.length > 100_000)
+    (typeof context.selectedGroup !== 'string' ||
+      context.selectedGroup.length >
+        (context.groupBy in derivedRunLabels ? MAX_DERIVED_IDENTITY_LENGTH : 100_000))
   )
     throw new Error('Invalid comparison group selection.')
   for (const [key, v] of Object.entries(context.filters))
     if (
       ![...sliceKeys, ...runKeys].includes(key as FilterKey) ||
       typeof v !== 'string' ||
-      v.length > 100_000
+      v.length > (key in derivedRunLabels ? MAX_DERIVED_IDENTITY_LENGTH : 100_000)
     )
       throw new Error(`Invalid comparison filter: ${key}.`)
 }
@@ -103,7 +146,9 @@ export function selectCohort(
   const runs = data.runs.filter(
     (run) =>
       eligibleIds.has(run.sliceId) &&
-      runKeys.every((key) => !filters[key] || run[key] === filters[key])
+      runKeys.every(
+        (key) => !filters[key] || runFilterIdentity(data, run, key).key === filters[key]
+      )
   )
   const matchingSliceIds = new Set(runs.map((run) => run.sliceId))
   // All active run conditions must be satisfied by the same run. With no run filters,
