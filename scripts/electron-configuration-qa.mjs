@@ -58,6 +58,26 @@ const data = {
   discoveries: [],
   pricing: []
 }
+// Mixed observed evidence; role and exact invocation text intentionally differ.
+Object.assign(data.runs[0], {
+  wallMinutes: 30,
+  usageBefore: 90,
+  usageAfter: 87,
+  filesChanged: 0,
+  testsPassed: 8,
+  testsFailed: 0,
+  buildResult: 'Passed',
+  runtimeTested: false,
+  result: 'Completed'
+})
+delete data.runs[1].inputTokens
+Object.assign(data.runs[1], { usageBefore: 5, usageAfter: 80, usageReset: true })
+Object.assign(data.runs[2], { wallMinutes: 0, usageBurn: 0 })
+for (const key of ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningTokens'])
+  delete data.runs[3][key]
+data.runs[3].runType = 'Unclassified invocation'
+Object.assign(data.runs[4], { role: 'Critic', runType: 'Re-critic' })
+Object.assign(data.runs[5], { role: 'Repair', runType: 'Verification' })
 const originalBytes = JSON.stringify(data, null, 2)
 await writeFile(join(directory, 'telemetry.json'), originalBytes)
 const env = { ...process.env, PENNYTEL_DATA_DIR: directory }
@@ -115,9 +135,9 @@ try {
   assert.equal(await page.locator('.bar-row').count(), 7)
   await captureElectron(app, page, { path: join(directory, 'configurations.png'), fullPage: true })
   await page.getByLabel('Group runs by', { exact: true }).selectOption('canonicalModel')
-  await page.getByRole('button', { name: /GPT-6 Astra\s*4\/4 priced/ }).waitFor()
+  await page.getByRole('button', { name: /GPT-6 Astra\s*2\/4 priced/ }).waitFor()
   await page.getByLabel('Group runs by', { exact: true }).selectOption('modelFamily')
-  await page.getByRole('button', { name: /Astra\s*4\/4 priced/ }).waitFor()
+  await page.getByRole('button', { name: /Astra\s*2\/4 priced/ }).waitFor()
   await page.getByLabel('Group runs by', { exact: true }).selectOption('model')
   assert.equal(await page.locator('.bar-row').count(), 5)
   await page.getByLabel('Group runs by', { exact: true }).selectOption('modelConfiguration')
@@ -180,14 +200,196 @@ try {
   assert.equal(analysis.app.version, version)
   assert.equal(analysis.groups[0].costUSD.completeTotal, 0.42)
   assert.equal(analysis.acceptedSlices[0].lifecycleRunIds.length, 8)
+  await page.getByRole('button', { name: 'Clear filters', exact: true }).click()
+  const candidate = (label) => page.getByRole('checkbox', { name: label, exact: true })
+  const table = page.getByRole('region', { name: 'Selected candidate comparison' })
+  const selectedKeys = []
+  for (const label of ['GPT-6 Astra — Low', 'GPT-5.6 Luna — Max']) {
+    await candidate(label).check()
+    selectedKeys.push(await candidate(label).inputValue())
+  }
+  assert.equal(await table.getByRole('columnheader').count(), 3)
+  assert.match(
+    await table.getByRole('row', { name: /^API-equivalent cost/ }).innerText(),
+    /1\/2 recorded.*incomplete/s
+  )
+  assert.match(
+    await table.getByRole('row', { name: /^Wall time/ }).innerText(),
+    /30m.*1\/2 recorded/s
+  )
+  await captureElectron(app, page, { path: join(directory, 'workspace-two.png'), fullPage: true })
+  for (const label of [
+    'GPT-6 Astra — ExtraHigh / XHigh',
+    'GPT-5.6 Sol — High',
+    'GPT-6 Astra — Unknown',
+    'Same — Low [1]',
+    'Same — Low [2]'
+  ]) {
+    await candidate(label).check()
+    selectedKeys.push(await candidate(label).inputValue())
+  }
+  assert.equal(new Set(selectedKeys).size, 7)
+  assert.equal(await table.getByRole('columnheader').count(), 8)
+  await candidate('Implementation (role: Implementer)').check()
+  assert.match(
+    await table.getByRole('columnheader', { name: /GPT-5.6 Luna/ }).innerText(),
+    /0 runs \/ no evidence/
+  )
+  await candidate('Critic (role: Critic)').check()
+  assert.match(
+    await table.getByRole('columnheader', { name: /GPT-5.6 Luna/ }).innerText(),
+    /1 runs/
+  )
+  await page.getByRole('button', { name: 'Clear stage scope', exact: true }).click()
+  await candidate('Recorded run type: Verification').check()
+  assert.match(await table.getByRole('columnheader', { name: /GPT-5.6 Sol/ }).innerText(), /1 runs/)
+  assert.match(
+    await table.getByRole('columnheader', { name: /GPT-5.6 Luna/ }).innerText(),
+    /0 runs \/ no evidence/
+  )
+  await candidate('Recorded run type: Re-critic').check()
+  assert.match(
+    await table.getByRole('columnheader', { name: /GPT-5.6 Luna/ }).innerText(),
+    /1 runs/
+  )
+  await filter.selectOption({ label: 'GPT-6 Astra — Low' })
+  assert.equal(await page.locator('.bar-row').count(), 0)
+  assert.equal(await table.getByRole('columnheader', { name: /0 runs \/ no evidence/ }).count(), 7)
+  await filter.selectOption('')
+  await page.getByRole('button', { name: 'Clear stage scope', exact: true }).click()
+  await candidate('Recorded run type: Unclassified invocation').check()
+  assert.match(
+    await table.getByRole('columnheader', { name: /GPT-6 Astra — Unknown/ }).innerText(),
+    /1 runs/
+  )
+  assert.match(
+    await table.getByRole('row', { name: /^API-equivalent cost/ }).innerText(),
+    /Unknown.*0\/1 recorded/s
+  )
+  await page.getByRole('button', { name: 'Clear stage scope', exact: true }).click()
+  const workspaceAllPath = join(directory, 'workspace-all.json')
+  async function exportWorkspace(path) {
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
+    }, path)
+    await page.getByRole('button', { name: 'Export comparison', exact: true }).click()
+    await page.getByRole('status').filter({ hasText: path }).waitFor()
+    return JSON.parse(await readFile(path, 'utf8'))
+  }
+  const all = await exportWorkspace(workspaceAllPath)
+  assert.deepEqual(all.context.selectedCandidates, selectedKeys)
+  assert.deepEqual(
+    all.candidates.map((c) => c.runIds),
+    [
+      ['low', 'alias-low'],
+      ['luna'],
+      ['xhigh'],
+      ['sol'],
+      ['unknown'],
+      ['collision-a'],
+      ['collision-b']
+    ]
+  )
+  assert.equal(all.candidates[0].metrics.costUSD.knownTotal, 0.42)
+  assert.equal(all.candidates[0].metrics.meanPricedRunCostUSD, 0.42)
+  assert.equal(all.candidates[0].metrics.costUSD.completeTotal, null)
+  assert.equal(all.candidates[0].metrics.evidence.numeric.reasoningTokens.knownTotal, 20000)
+  assert.equal(all.candidates[0].metrics.evidence.numeric.filesChanged.knownTotal, 0)
+  assert.equal(all.candidates[0].metrics.usageBurnPercentagePoints.recorded, 1)
+  assert.equal(all.candidates[4].metrics.costUSD.knownTotal, null)
+  assert.equal(all.app.version, '0.1.2')
+  await candidate('Implementation (role: Implementer)').check()
+  await candidate('Recorded run type: Verification').check()
+  const workspacePath = join(directory, 'workspace-scoped.json')
+  const scoped = await exportWorkspace(workspacePath)
+  assert.deepEqual(scoped.context.stageScopes, [
+    { kind: 'role', value: 'Implementer' },
+    { kind: 'runType', value: 'Verification' }
+  ])
+  assert.deepEqual(scoped.context.selectedCandidates, selectedKeys)
+  assert.deepEqual(
+    scoped.candidates.map((c) => c.runIds),
+    [['low', 'alias-low'], [], ['xhigh'], ['sol'], ['unknown'], ['collision-a'], ['collision-b']]
+  )
+  assert.deepEqual(scoped.acceptedSlices, all.acceptedSlices)
+  assert.equal(scoped.candidates[1].metrics.costUSD.knownTotal, null)
+  const invalid = await page.evaluate(
+    async (request) => {
+      const messages = []
+      for (const candidate of [
+        { ...request, revision: request.revision + 1 },
+        { ...request, context: { ...request.context, selectedCandidates: ['display label'] } },
+        {
+          ...request,
+          context: { ...request.context, stageScopes: [{ kind: 'role', value: 'Verification' }] }
+        }
+      ]) {
+        try {
+          await window.pennytel.exportComparison(candidate)
+          messages.push('unexpected success')
+        } catch (error) {
+          messages.push(error.message)
+        }
+      }
+      return messages
+    },
+    { revision: data.revision, context: scoped.context }
+  )
+  assert.match(invalid[0], /changed/)
+  assert.match(invalid[1], /candidate selection/)
+  assert.match(invalid[2], /stage scope/)
+  assert.match(
+    await page.evaluate(async (text) => {
+      try {
+        await window.pennytel.previewImport(text)
+        return 'unexpected success'
+      } catch (error) {
+        return error.message
+      }
+    }, JSON.stringify(scoped)),
+    /not importable telemetry/
+  )
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 700))
   await page.getByText(`PennyTel v${version}`, { exact: false }).waitFor({ state: 'visible' })
   const versionBox = await page.locator('.sidebar .version').boundingBox()
   assert.ok(versionBox && versionBox.y >= 0 && versionBox.y + versionBox.height <= 700)
+  await table.scrollIntoViewIfNeeded()
+  assert.equal(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    true
+  )
+  const layout = await table.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth
+    element.scrollTop = element.scrollHeight
+    const bounds = element.getBoundingClientRect()
+    const heading = element.querySelector('thead').getBoundingClientRect()
+    const pinned = element.querySelector('thead th').getBoundingClientRect()
+    return {
+      width: element.clientWidth,
+      scroll: element.scrollLeft,
+      pinned: pinned.top >= bounds.top && pinned.bottom <= bounds.bottom,
+      verticallyScrolled: heading.top < bounds.top
+    }
+  })
+  assert.ok(layout.width > 400 && layout.scroll > 0)
+  assert.equal(layout.pinned, true)
+  assert.equal(layout.verticallyScrolled, true)
+  assert.equal(await candidate('Same — Low [2]').isChecked(), true)
   await captureElectron(app, page, {
-    path: join(directory, 'configuration-filter-narrow.png'),
+    path: join(directory, 'workspace-seven-narrow.png'),
     fullPage: true
   })
+  await table.evaluate((element) => {
+    element.scrollLeft = 0
+    element.scrollTop = 0
+  })
+  await captureElectron(app, page, { path: join(directory, 'workspace-narrow-visible.png') })
+  await page.getByRole('button', { name: 'Clear candidates', exact: true }).click()
+  for (const label of ['GPT-6 Astra — Low', 'GPT-5.6 Luna — Max']) await candidate(label).check()
+  await table.scrollIntoViewIfNeeded()
+  assert.equal(await table.getByRole('columnheader').count(), 3)
+  assert.equal(await table.evaluate((element) => element.scrollWidth <= element.clientWidth), true)
+  await captureElectron(app, page, { path: join(directory, 'workspace-two-narrow.png') })
   const rawPath = join(directory, 'raw.json')
   await app.evaluate(({ dialog }, path) => {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
@@ -199,9 +401,11 @@ try {
   await launch()
   assert.deepEqual((await page.evaluate(() => window.pennytel.load())).data, data)
   assert.equal(await readFile(join(directory, 'telemetry.json'), 'utf8'), originalBytes)
+  await page.getByRole('navigation').getByRole('button', { name: 'Compare', exact: true }).click()
+  assert.equal(await page.getByRole('checkbox', { checked: true }).count(), 0)
   assert.deepEqual(errors, [])
   console.log(
-    `PASS: configuration groups, aliases, rollups, Unknown filter, export, frozen cost/source bytes, restart and visible v${version}${executablePath ? ' packaged app' : ''}. Evidence: ${directory}`
+    `PASS: configuration groups, 2/7 candidate workspace, collision keys, role/exact stages, unknown/partial evidence, authoritative scoped export, raw bytes, restart, 900px layout and visible v${version}${executablePath ? ' packaged app' : ''}. Evidence: ${directory}`
   )
 } finally {
   if (app) await app.close()

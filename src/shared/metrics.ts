@@ -89,6 +89,79 @@ export function validatedDiscovery(discovery: Discovery): boolean {
     discovery.validation === 'Yes'
   )
 }
+export interface MeasuredTotal {
+  knownTotal: number | null
+  completeTotal: number | null
+  recorded: number
+  total: number
+  complete: boolean
+}
+export function measured(
+  known: number,
+  recorded: number,
+  total: number,
+  emptyIsZero = false
+): MeasuredTotal {
+  const knownTotal = recorded > 0 || (emptyIsZero && total === 0) ? known : null
+  const complete = recorded === total && (total > 0 || emptyIsZero)
+  return { knownTotal, completeTotal: complete ? knownTotal : null, recorded, total, complete }
+}
+
+export const numericEvidenceLabels = {
+  inputTokens: 'Fresh input tokens',
+  cachedInputTokens: 'Cached input tokens',
+  outputTokens: 'Output tokens',
+  reasoningTokens: 'Reasoning tokens (within output)',
+  filesChanged: 'Files changed',
+  testsAdded: 'Tests added',
+  testsPassed: 'Tests passed',
+  testsFailed: 'Tests failed',
+  testsSkipped: 'Tests skipped'
+} as const
+export interface RecordedCounts {
+  counts: { value: string | boolean; count: number }[]
+  recorded: number
+  total: number
+  complete: boolean
+}
+export function recordedCounts(values: (string | boolean | undefined)[]): RecordedCounts {
+  const known = values.filter((value) => value !== undefined)
+  return {
+    counts: [...new Set(known)]
+      .sort((a, b) => String(a).localeCompare(String(b)))
+      .map((value) => ({ value, count: known.filter((v) => v === value).length })),
+    recorded: known.length,
+    total: values.length,
+    complete: values.length > 0 && known.length === values.length
+  }
+}
+export function runEvidence(runs: Run[]): {
+  numeric: Record<keyof typeof numericEvidenceLabels, MeasuredTotal>
+  buildResult: RecordedCounts
+  runtimeTested: RecordedCounts
+  result: RecordedCounts
+  role: RecordedCounts
+} {
+  return {
+    numeric: Object.fromEntries(
+      (Object.keys(numericEvidenceLabels) as (keyof typeof numericEvidenceLabels)[]).map((key) => {
+        const values = runs.flatMap((run) => (run[key] === undefined ? [] : [run[key]]))
+        return [
+          key,
+          measured(
+            values.reduce((a, b) => a + b, 0),
+            values.length,
+            runs.length
+          )
+        ]
+      })
+    ) as Record<keyof typeof numericEvidenceLabels, MeasuredTotal>,
+    buildResult: recordedCounts(runs.map((run) => run.buildResult)),
+    runtimeTested: recordedCounts(runs.map((run) => run.runtimeTested)),
+    result: recordedCounts(runs.map((run) => run.result)),
+    role: recordedCounts(runs.map((run) => run.role))
+  }
+}
 export function summarize(runs: Run[]): {
   cost: number
   priced: number

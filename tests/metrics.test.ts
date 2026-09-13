@@ -11,13 +11,74 @@ import {
   usageBurn,
   validatedDiscovery,
   roleSummary,
-  cacheRatio
+  cacheRatio,
+  runEvidence
 } from '../src/shared/metrics'
 import { snapshotRun } from '../src/shared/data'
 import { fixture, runFixture } from './fixtures'
 import type { Discovery } from '../src/shared/types'
 
 describe('deterministic telemetry calculations', () => {
+  it('aggregates only recorded numeric and categorical run evidence with independent coverage', () => {
+    const evidence = runEvidence([
+      runFixture({
+        filesChanged: 0,
+        testsAdded: 2,
+        testsPassed: 8,
+        testsFailed: 0,
+        testsSkipped: 1,
+        buildResult: 'Not run',
+        runtimeTested: false,
+        result: 'Needs repair'
+      }),
+      runFixture({
+        inputTokens: undefined,
+        cachedInputTokens: 0,
+        outputTokens: undefined,
+        reasoningTokens: undefined,
+        filesChanged: 3,
+        testsPassed: 4,
+        buildResult: 'Passed',
+        runtimeTested: true,
+        result: 'Completed'
+      })
+    ])
+    expect(evidence.numeric.inputTokens).toEqual({
+      knownTotal: 100_000,
+      completeTotal: null,
+      recorded: 1,
+      total: 2,
+      complete: false
+    })
+    expect(evidence.numeric.cachedInputTokens.completeTotal).toBe(40_000)
+    expect(evidence.numeric.outputTokens.knownTotal).toBe(20_000)
+    expect(evidence.numeric.reasoningTokens).toMatchObject({ knownTotal: 10_000, recorded: 1 })
+    expect(evidence.numeric.filesChanged.completeTotal).toBe(3)
+    expect(evidence.numeric.testsAdded).toMatchObject({
+      knownTotal: 2,
+      recorded: 1,
+      complete: false
+    })
+    expect(evidence.numeric.testsPassed.completeTotal).toBe(12)
+    expect(evidence.numeric.testsFailed.knownTotal).toBe(0)
+    expect(evidence.numeric.testsSkipped.knownTotal).toBe(1)
+    expect(evidence.runtimeTested.counts).toEqual([
+      { value: false, count: 1 },
+      { value: true, count: 1 }
+    ])
+    expect(evidence.buildResult.counts).toEqual([
+      { value: 'Not run', count: 1 },
+      { value: 'Passed', count: 1 }
+    ])
+    expect(evidence.result).toMatchObject({ recorded: 2, complete: true })
+    for (const rows of [[], [runFixture()]]) {
+      const unknown = runEvidence(rows)
+      expect(unknown.numeric.filesChanged.knownTotal).toBeNull()
+      expect(unknown.numeric.filesChanged.complete).toBe(false)
+      expect(unknown.runtimeTested.recorded).toBe(0)
+      expect(unknown.runtimeTested.counts).toEqual([])
+    }
+  })
   it('does not present unpriced role work as zero burden', () => {
     expect(roleSummary([runFixture({ role: 'Critic' })], 'Critic')).toEqual({
       cost: null,

@@ -2,15 +2,31 @@ import { useState } from 'react'
 import type { Dataset, Run } from '../../../shared/types'
 import {
   compareData,
+  MAX_COMPARISON_CANDIDATES,
+  MAX_COMPARISON_STAGE_SCOPES,
   runFilterLabels,
   runFilterOptions,
   sliceFilterLabels,
+  stageScopeKey,
+  stageScopeLabel,
+  stageScopeOptions,
+  type ComparisonCandidate,
   type ComparisonFilters,
   type ComparisonSort,
-  type FilterKey
+  type FilterKey,
+  type StageScope
 } from '../../../shared/comparison'
 import { burnLabel, displayTimestamp, qualityLabel } from '../../../shared/presentation'
-import { duration, groupLabels, money, percent, type GroupBy } from '../../../shared/metrics'
+import {
+  duration,
+  groupLabels,
+  money,
+  percent,
+  numericEvidenceLabels,
+  type GroupBy,
+  type MeasuredTotal,
+  type RecordedCounts
+} from '../../../shared/metrics'
 import { Empty, Metric } from '../components/ui'
 import { RunTable } from '../components/RunTable'
 import type { ComparisonIdentity } from '../../../shared/configuration'
@@ -25,12 +41,30 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
   const [filters, setFilters] = useState<ComparisonFilters>({})
   const [selected, setSelected] = useState<string>()
   const [sort, setSort] = useState<ComparisonSort>('label')
+  const [selectedCandidates, setSelectedCandidates] = useState<string[]>([])
+  const [stageScopes, setStageScopes] = useState<StageScope[]>([])
   const [exportBusy, setExportBusy] = useState(false)
   const [exportError, setExportError] = useState('')
   const [exportMessage, setExportMessage] = useState('')
-  const context = { filters, groupBy, sort, ...(selected ? { selectedGroup: selected } : {}) }
-  const { slices, runs, summary, groups, selectedGroup, shownRuns, discoveries, accepted } =
-    compareData(data, context)
+  const context = {
+    filters,
+    groupBy,
+    sort,
+    ...(selected ? { selectedGroup: selected } : {}),
+    ...(selectedCandidates.length ? { selectedCandidates } : {}),
+    ...(stageScopes.length ? { stageScopes } : {})
+  }
+  const {
+    slices,
+    runs,
+    summary,
+    groups,
+    candidates,
+    selectedGroup,
+    shownRuns,
+    discoveries,
+    accepted
+  } = compareData(data, context)
   const exportComparison = async (): Promise<void> => {
     setExportBusy(true)
     setExportError('')
@@ -50,6 +84,14 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
   const sliceKeys = Object.keys(sliceFilterLabels) as (keyof typeof sliceFilterLabels)[]
   const runKeys = Object.keys(runFilterLabels) as (keyof typeof runFilterLabels)[]
   const knownMax = Math.max(...groups.map((g) => g.stats.cost), 0)
+  const candidateOptions = runFilterOptions(data, 'modelConfiguration')
+  for (const candidate of candidates)
+    if (!candidateOptions.some((option) => option.key === candidate.key))
+      candidateOptions.push({ key: candidate.key, label: candidate.label })
+  const stageOptions = stageScopeOptions(data)
+  for (const scope of stageScopes)
+    if (!stageOptions.some((option) => stageScopeKey(option) === stageScopeKey(scope)))
+      stageOptions.push(scope)
   const filterOptions: [FilterKey, string, ComparisonIdentity[]][] = [
     ...sliceKeys.map(
       (k) =>
@@ -166,6 +208,184 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
             ))}
           </div>
         </details>
+      </section>
+      <section className="panel comparison-workspace" aria-label="Comparison workspace">
+        <div className="section-heading">
+          <div>
+            <h2>Side-by-side configurations</h2>
+            <p className="muted">
+              Select 2–{MAX_COMPARISON_CANDIDATES} configurations. Columns follow selection order.
+            </p>
+          </div>
+          <button onClick={() => setSelectedCandidates([])} disabled={!selectedCandidates.length}>
+            Clear candidates
+          </button>
+        </div>
+        <fieldset>
+          <legend>
+            Model Configurations · {selectedCandidates.length}/{MAX_COMPARISON_CANDIDATES} selected
+          </legend>
+          <div className="comparison-choices">
+            {candidateOptions.map((option) => (
+              <label key={option.key}>
+                <input
+                  type="checkbox"
+                  value={option.key}
+                  checked={selectedCandidates.includes(option.key)}
+                  disabled={
+                    !selectedCandidates.includes(option.key) &&
+                    selectedCandidates.length >= MAX_COMPARISON_CANDIDATES
+                  }
+                  onChange={(event) =>
+                    setSelectedCandidates(
+                      event.target.checked
+                        ? [...selectedCandidates, option.key]
+                        : selectedCandidates.filter((key) => key !== option.key)
+                    )
+                  }
+                />
+                <span>{option.label}</span>
+              </label>
+            ))}
+          </div>
+          {!candidateOptions.length && <p className="muted">No configuration evidence recorded.</p>}
+        </fieldset>
+        <fieldset>
+          <legend>Stage scope</legend>
+          <p className="muted">
+            Selected scopes match any one scope, together with all active filters. Recorded run
+            types retain their exact text.
+          </p>
+          <div className="comparison-choices">
+            {stageOptions.map((scope) => {
+              const key = stageScopeKey(scope)
+              const checked = stageScopes.some((selected) => stageScopeKey(selected) === key)
+              return (
+                <label key={key}>
+                  <input
+                    type="checkbox"
+                    value={key}
+                    checked={checked}
+                    disabled={!checked && stageScopes.length >= MAX_COMPARISON_STAGE_SCOPES}
+                    onChange={(event) => {
+                      setStageScopes(
+                        event.target.checked
+                          ? [...stageScopes, scope]
+                          : stageScopes.filter((selected) => stageScopeKey(selected) !== key)
+                      )
+                      setSelected(undefined)
+                    }}
+                  />
+                  <span>{stageScopeLabel(scope)}</span>
+                </label>
+              )
+            })}
+          </div>
+          <p className="comparison-scope">
+            Active scope:{' '}
+            {stageScopes.length
+              ? stageScopes.map(stageScopeLabel).join(' OR ')
+              : 'All runs (no stage scope)'}
+          </p>
+          {stageScopes.length > 0 && (
+            <button
+              onClick={() => {
+                setStageScopes([])
+                setSelected(undefined)
+              }}
+            >
+              Clear stage scope
+            </button>
+          )}
+        </fieldset>
+        {candidates.length < 2 && (
+          <p className="muted">
+            Select {candidates.length ? 'one more configuration' : 'at least two configurations'} to
+            compare observed evidence.
+          </p>
+        )}
+        {candidates.length > 0 && (
+          <>
+            <p className="footnote">
+              Known subtotals cover only recorded measurements. Lower coverage does not indicate
+              lower cost or faster work. Scroll the table horizontally to inspect additional
+              columns.
+            </p>
+            <div
+              className="table-wrap candidate-table"
+              role="region"
+              aria-label="Selected candidate comparison"
+              tabIndex={0}
+            >
+              <table>
+                <caption>
+                  Observed run evidence · {candidates.length} selected configurations
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Evidence</th>
+                    {candidates.map((candidate) => (
+                      <th scope="col" key={candidate.key}>
+                        {candidate.label}
+                        <small>
+                          {candidate.runs.length} runs
+                          {!candidate.runs.length ? ' / no evidence' : ''}
+                        </small>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {candidateMetricRows.map(([label, render]) => (
+                    <tr key={label}>
+                      <th scope="row">{label}</th>
+                      {candidates.map((candidate) => (
+                        <td key={candidate.key}>{render(candidate)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {candidates.map((candidate) => (
+              <details className="candidate-evidence" key={candidate.key}>
+                <summary>
+                  Inspect evidence · {candidate.label} · {candidate.runs.length} runs
+                </summary>
+                {!candidate.runs.length ? (
+                  <p>No matching run evidence under the active filters and stage scope.</p>
+                ) : (
+                  <>
+                    <RunTable runs={candidate.runs} onOpen={onOpenRun} />
+                    <p>
+                      Linked findings: {candidate.findings.length}. Linked discoveries:{' '}
+                      {candidate.discoveries.length}. These record discovery attribution, not fault.
+                    </p>
+                    {candidate.findings.map((finding) => (
+                      <p key={finding.id}>
+                        {finding.id} · {finding.severity} · {finding.category} ·{' '}
+                        {finding.status ?? 'Unknown status'}: {finding.description}
+                      </p>
+                    ))}
+                    {candidate.discoveries.map((discovery) => (
+                      <p key={discovery.id}>
+                        {discovery.id} · Validation: {discovery.validation ?? 'Unknown'}:{' '}
+                        {discovery.description}
+                      </p>
+                    ))}
+                  </>
+                )}
+              </details>
+            ))}
+          </>
+        )}
+        <p className="footnote">
+          Candidates partition the scoped observed runs. They do not change the base cohort or
+          assign accepted-slice cost to a configuration. Reasoning is included in output and is
+          never charged separately. Usage burn is recorded per run; weekly series and meter identity
+          are unavailable. File/test counts are recorded numeric evidence; file lists, test names,
+          and verification artifacts are unavailable.
+        </p>
       </section>
       <div className="metrics">
         <Metric
@@ -368,8 +588,9 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
           <div>
             <h2>Accepted slice economics</h2>
             <p className="muted">
-              Run filters qualify slices for this cohort. Each qualifying slice retains its full
-              relevant lifecycle across models and roles, including critic and repair costs.
+              Run filters and stage scope qualify slices for this cohort. Each qualifying slice
+              retains its full relevant lifecycle across models and roles, including critic and
+              repair costs.
             </p>
           </div>
         </div>
@@ -464,3 +685,83 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
     </>
   )
 }
+
+function measurement(
+  value: MeasuredTotal,
+  format: (value: number | null) => string = (v) =>
+    v === null ? 'Unknown' : v.toLocaleString('en-US')
+): React.JSX.Element {
+  return (
+    <>
+      {format(value.knownTotal)}
+      <small>
+        {value.recorded}/{value.total} recorded{value.complete ? '' : ' · incomplete'}
+      </small>
+    </>
+  )
+}
+function counts(value: RecordedCounts): React.JSX.Element {
+  return (
+    <>
+      {value.recorded
+        ? value.counts
+            .map(
+              ({ value, count }) =>
+                `${typeof value === 'boolean' ? (value ? 'Yes' : 'No') : value}: ${count}`
+            )
+            .join(' · ')
+        : 'Unknown'}
+      <small>
+        {value.recorded}/{value.total} recorded{value.complete ? '' : ' · incomplete'}
+      </small>
+    </>
+  )
+}
+const candidateMetricRows: [string, (candidate: ComparisonCandidate) => React.ReactNode][] = [
+  ['Sample / run count', (c) => (c.runs.length ? `${c.runs.length} runs` : '0 runs / no evidence')],
+  ['API-equivalent cost (known total)', (c) => measurement(c.metrics.costUSD, money)],
+  [
+    'Mean API-equivalent cost (priced runs)',
+    (c) => (
+      <>
+        {money(c.metrics.meanPricedRunCostUSD)}
+        <small>
+          {c.metrics.costUSD.recorded}/{c.runs.length} priced
+        </small>
+      </>
+    )
+  ],
+  ['Wall time (summed)', (c) => measurement(c.metrics.wallMinutes, duration)],
+  ...(Object.entries(numericEvidenceLabels) as [keyof typeof numericEvidenceLabels, string][]).map(
+    ([key, label]): [string, (c: ComparisonCandidate) => React.ReactNode] => [
+      label,
+      (c) => measurement(c.metrics.evidence.numeric[key])
+    ]
+  ),
+  [
+    'Cache ratio (token weighted)',
+    (c) => (
+      <>
+        {percent(c.metrics.cache.ratio)}
+        <small>
+          {c.metrics.cache.knownRuns}/{c.runs.length} input pairs recorded
+          {c.metrics.cache.ratio === null ? ' · denominator unknown or zero' : ''}
+        </small>
+      </>
+    )
+  ],
+  [
+    'Usage burn (percentage points)',
+    (c) => measurement(c.metrics.usageBurnPercentagePoints, burnLabel)
+  ],
+  ['Build result', (c) => counts(c.metrics.evidence.buildResult)],
+  ['Runtime tested', (c) => counts(c.metrics.evidence.runtimeTested)],
+  ['Run result', (c) => counts(c.metrics.evidence.result)],
+  ['Recorded roles / repair evidence', (c) => counts(c.metrics.evidence.role)],
+  ['Touched slice dispositions (not attributed)', (c) => counts(c.sliceDispositions)],
+  [
+    'Linked findings / discoveries',
+    (c) =>
+      c.runs.length ? `${c.findings.length} / ${c.discoveries.length} recorded` : 'No run evidence'
+  ]
+]

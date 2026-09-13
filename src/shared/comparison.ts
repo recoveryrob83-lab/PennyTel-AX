@@ -11,12 +11,50 @@ import {
   acceptanceRuns,
   groupLabels,
   groupRuns,
+  measured,
+  recordedCounts,
   roleSummary,
+  runEvidence,
   summarize,
   timeToAccepted,
   validatedDiscovery,
-  type GroupBy
+  type GroupBy,
+  type MeasuredTotal
 } from './metrics'
+
+export type { MeasuredTotal } from './metrics'
+
+// Bounded, ephemeral analysis state. Eight columns support a small working set;
+// sixteen scopes allow combinations of broad roles and exact recorded run types.
+export const MAX_COMPARISON_CANDIDATES = 8
+export const MAX_COMPARISON_STAGE_SCOPES = 16
+export const MAX_RUN_TYPE_SCOPE_LENGTH = 100_000
+export const structuredStageLabels = {
+  Implementer: 'Implementation',
+  Critic: 'Critic',
+  Repair: 'Repair'
+} as const
+export type StageScope =
+  { kind: 'role'; value: keyof typeof structuredStageLabels } | { kind: 'runType'; value: string }
+
+export function stageScopeKey(scope: StageScope): string {
+  return JSON.stringify([scope.kind, scope.value])
+}
+export function stageScopeLabel(scope: StageScope): string {
+  return scope.kind === 'role'
+    ? `${structuredStageLabels[scope.value]} (role: ${scope.value})`
+    : `Recorded run type: ${scope.value}`
+}
+export function stageScopeOptions(data: Dataset): StageScope[] {
+  return [
+    ...(Object.keys(structuredStageLabels) as (keyof typeof structuredStageLabels)[]).map(
+      (value): StageScope => ({ kind: 'role', value })
+    ),
+    ...[...new Set(data.runs.map((run) => run.runType))]
+      .sort()
+      .map((value): StageScope => ({ kind: 'runType', value }))
+  ]
+}
 
 export const sliceFilterLabels = {
   project: 'Project',
@@ -44,6 +82,8 @@ export interface ComparisonContext {
   groupBy: GroupBy
   sort: ComparisonSort
   selectedGroup?: string
+  selectedCandidates?: string[]
+  stageScopes?: StageScope[]
 }
 export interface ComparisonRequest {
   revision: number
@@ -100,6 +140,32 @@ const categories = [
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
+function validConfigurationKey(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > MAX_DERIVED_IDENTITY_LENGTH) return false
+  try {
+    const configuration = JSON.parse(value)
+    if (
+      !Array.isArray(configuration) ||
+      configuration.length !== 2 ||
+      typeof configuration[0] !== 'string' ||
+      JSON.stringify(configuration) !== value ||
+      ![null, 'Low', 'Medium', 'High', 'ExtraHigh', 'Max'].includes(configuration[1])
+    )
+      return false
+    const model = JSON.parse(configuration[0])
+    const sourceText = (v: unknown): boolean => typeof v === 'string' && v.length <= 100_000
+    return (
+      Array.isArray(model) &&
+      JSON.stringify(model) === configuration[0] &&
+      ((model.length === 2 && model[0] === 'model' && sourceText(model[1])) ||
+        (model.length === 3 &&
+          model[0] === 'unresolved-model' &&
+          model.slice(1).every((v) => v === null || sourceText(v))))
+    )
+  } catch {
+    return false
+  }
+}
 export function validateComparisonRequest(value: unknown): asserts value is ComparisonRequest {
   if (
     !isObject(value) ||
@@ -112,7 +178,15 @@ export function validateComparisonRequest(value: unknown): asserts value is Comp
   if (
     !isObject(context) ||
     Object.keys(context).some(
-      (k) => !['filters', 'groupBy', 'sort', 'selectedGroup'].includes(k)
+      (k) =>
+        ![
+          'filters',
+          'groupBy',
+          'sort',
+          'selectedGroup',
+          'selectedCandidates',
+          'stageScopes'
+        ].includes(k)
     ) ||
     typeof context.groupBy !== 'string' ||
     !Object.keys(groupLabels).includes(context.groupBy) ||
@@ -120,6 +194,34 @@ export function validateComparisonRequest(value: unknown): asserts value is Comp
     !isObject(context.filters)
   )
     throw new Error('Invalid comparison context.')
+  if (
+    context.selectedCandidates !== undefined &&
+    (!Array.isArray(context.selectedCandidates) ||
+      context.selectedCandidates.length > MAX_COMPARISON_CANDIDATES ||
+      !Array.from(context.selectedCandidates).every(validConfigurationKey) ||
+      new Set(context.selectedCandidates).size !== context.selectedCandidates.length)
+  )
+    throw new Error('Invalid comparison candidate selection.')
+  if (context.stageScopes !== undefined) {
+    const scopes = context.stageScopes
+    if (
+      !Array.isArray(scopes) ||
+      scopes.length > MAX_COMPARISON_STAGE_SCOPES ||
+      !Array.from(scopes).every(
+        (scope) =>
+          isObject(scope) &&
+          Object.keys(scope).length === 2 &&
+          Object.keys(scope).every((key) => key === 'kind' || key === 'value') &&
+          typeof scope.value === 'string' &&
+          ((scope.kind === 'role' && Object.hasOwn(structuredStageLabels, scope.value)) ||
+            (scope.kind === 'runType' &&
+              scope.value.trim().length > 0 &&
+              scope.value.length <= MAX_RUN_TYPE_SCOPE_LENGTH))
+      ) ||
+      new Set(scopes.map((scope) => stageScopeKey(scope as StageScope))).size !== scopes.length
+    )
+      throw new Error('Invalid comparison stage scope selection.')
+  }
   if (
     context.selectedGroup !== undefined &&
     (typeof context.selectedGroup !== 'string' ||
@@ -137,7 +239,8 @@ export function validateComparisonRequest(value: unknown): asserts value is Comp
 }
 export function selectCohort(
   data: Dataset,
-  filters: ComparisonFilters
+  filters: ComparisonFilters,
+  stageScopes: StageScope[] = []
 ): { eligibleSlices: Slice[]; slices: Slice[]; runs: Run[] } {
   const eligibleSlices = data.slices.filter((slice) =>
     sliceKeys.every((key) => !filters[key] || String(slice[key] ?? '') === filters[key])
@@ -148,14 +251,16 @@ export function selectCohort(
       eligibleIds.has(run.sliceId) &&
       runKeys.every(
         (key) => !filters[key] || runFilterIdentity(data, run, key).key === filters[key]
-      )
+      ) &&
+      (!stageScopes.length || stageScopes.some((scope) => run[scope.kind] === scope.value))
   )
   const matchingSliceIds = new Set(runs.map((run) => run.sliceId))
-  // All active run conditions must be satisfied by the same run. With no run filters,
+  // All active run conditions must be satisfied by the same run. With no run filters or stages,
   // empty slices remain visible; their costs are unknown rather than silently dropped.
-  const slices = runKeys.some((key) => !!filters[key])
-    ? eligibleSlices.filter((slice) => matchingSliceIds.has(slice.id))
-    : eligibleSlices
+  const slices =
+    stageScopes.length || runKeys.some((key) => !!filters[key])
+      ? eligibleSlices.filter((slice) => matchingSliceIds.has(slice.id))
+      : eligibleSlices
   return { eligibleSlices, slices, runs }
 }
 export function defectSummary(findings: Finding[]): {
@@ -263,6 +368,7 @@ export interface ComparisonView {
   runs: Run[]
   summary: ReturnType<typeof summarize>
   groups: ComparisonGroup[]
+  candidates: ComparisonCandidate[]
   findings: Finding[]
   defects: ReturnType<typeof defectSummary>
   discoveries: Discovery[]
@@ -270,8 +376,18 @@ export interface ComparisonView {
   shownRuns: Run[]
   accepted: ReturnType<typeof acceptedEconomics>[]
 }
+export interface ComparisonCandidate {
+  key: string
+  label: string
+  runs: Run[]
+  metrics: AnalysisMetrics
+  findings: Finding[]
+  defects: ReturnType<typeof defectSummary>
+  discoveries: Discovery[]
+  sliceDispositions: ReturnType<typeof recordedCounts>
+}
 export function compareData(data: Dataset, context: ComparisonContext): ComparisonView {
-  const cohort = selectCohort(data, context.filters)
+  const cohort = selectCohort(data, context.filters, context.stageScopes)
   const runIds = new Set(cohort.runs.map((r) => r.id))
   const findings = data.findings.filter((f) => f.runId !== undefined && runIds.has(f.runId))
   const discoveries = data.discoveries.filter(
@@ -304,10 +420,33 @@ export function compareData(data: Dataset, context: ComparisonContext): Comparis
             : 0) || a.label.localeCompare(b.label)
     )
   const selectedGroup = groups.find((g) => g.key === context.selectedGroup)
+  const candidateLabels = derivedPresentationLabels(data, 'modelConfiguration')
+  const candidateGroups = new Map(
+    groupRuns(data, cohort.runs, 'modelConfiguration').map((g) => [g.key, g.runs])
+  )
+  const candidates = (context.selectedCandidates ?? []).map((key): ComparisonCandidate => {
+    const runs = candidateGroups.get(key) ?? []
+    const ids = new Set(runs.map((run) => run.id))
+    const sliceIds = new Set(runs.map((run) => run.sliceId))
+    const candidateFindings = findings.filter((finding) => ids.has(finding.runId!))
+    return {
+      key,
+      label: candidateLabels.get(key) ?? 'Unknown configuration (unavailable in dataset)',
+      runs,
+      metrics: comparisonMetrics(runs),
+      findings: candidateFindings,
+      defects: defectSummary(candidateFindings),
+      discoveries: data.discoveries.filter((d) => d.runId !== undefined && ids.has(d.runId)),
+      sliceDispositions: recordedCounts(
+        cohort.slices.filter((s) => sliceIds.has(s.id)).map((s) => s.disposition)
+      )
+    }
+  })
   return {
     ...cohort,
     summary: summarize(cohort.runs),
     groups,
+    candidates,
     findings,
     defects: defectSummary(findings),
     discoveries,
@@ -318,24 +457,7 @@ export function compareData(data: Dataset, context: ComparisonContext): Comparis
       .map((slice) => acceptedEconomics(data, slice))
   }
 }
-export interface MeasuredTotal {
-  knownTotal: number | null
-  completeTotal: number | null
-  recorded: number
-  total: number
-  complete: boolean
-}
-function measured(
-  known: number,
-  recorded: number,
-  total: number,
-  emptyIsZero = false
-): MeasuredTotal {
-  const knownTotal = recorded > 0 || (emptyIsZero && total === 0) ? known : null
-  const complete = recorded === total && (total > 0 || emptyIsZero)
-  return { knownTotal, completeTotal: complete ? knownTotal : null, recorded, total, complete }
-}
-interface AnalysisMetrics {
+export interface AnalysisMetrics {
   runCount: number
   costUSD: MeasuredTotal
   meanPricedRunCostUSD: number | null
@@ -344,6 +466,7 @@ interface AnalysisMetrics {
   cache: { ratio: number | null; knownRuns: number; totalRuns: number; complete: boolean }
   repairPasses: number
   roles: Record<Role, MeasuredTotal>
+  evidence: ReturnType<typeof runEvidence>
 }
 export interface ComparisonAnalysis {
   kind: 'pennytel-comparison'
@@ -375,6 +498,7 @@ export interface ComparisonAnalysis {
     discoveryIds: string[]
     acceptedSliceQuality: ReturnType<typeof qualitySummary>
   })[]
+  candidates: (Omit<ComparisonCandidate, 'runs'> & { runIds: string[]; sliceIds: string[] })[]
   acceptedSlices: (AnalysisMetrics & {
     sliceId: string
     title: string
@@ -395,9 +519,10 @@ export interface ComparisonAnalysis {
   })[]
   conventions: Record<string, string | boolean>
 }
-function exportMetrics(runs: Run[]): AnalysisMetrics {
+export function comparisonMetrics(runs: Run[]): AnalysisMetrics {
   const stats = summarize(runs)
   return {
+    evidence: runEvidence(runs),
     runCount: runs.length,
     costUSD: measured(stats.cost, stats.priced, runs.length),
     meanPricedRunCostUSD: stats.priced ? stats.cost / stats.priced : null,
@@ -451,7 +576,7 @@ export function comparisonExport(
       selectedGroup: view.selectedGroup?.key ?? null
     },
     summary: {
-      ...exportMetrics(view.runs),
+      ...comparisonMetrics(view.runs),
       defectsFound: view.defects,
       validatedAutonomousDiscoveries: view.discoveries.length,
       acceptedSliceQuality: qualitySummary(view.accepted.map((a) => a.slice))
@@ -461,12 +586,17 @@ export function comparisonExport(
       label: group.label,
       runIds: group.runs.map((r) => r.id),
       sliceIds: [...new Set(group.runs.map((r) => r.sliceId))],
-      ...exportMetrics(group.runs),
+      ...comparisonMetrics(group.runs),
       defectsFound: group.defects,
       findingIds: group.findings.map((f) => f.id),
       validatedAutonomousDiscoveries: group.discoveries.length,
       discoveryIds: group.discoveries.map((d) => d.id),
       acceptedSliceQuality: group.quality
+    })),
+    candidates: view.candidates.map(({ runs, ...candidate }) => ({
+      ...candidate,
+      runIds: runs.map((run) => run.id),
+      sliceIds: [...new Set(runs.map((run) => run.sliceId))]
     })),
     acceptedSlices: view.accepted.map((a) => ({
       sliceId: a.slice.id,
@@ -477,7 +607,7 @@ export function comparisonExport(
       qualityGrade: a.slice.qualityGrade ?? null,
       acceptedAt: a.slice.acceptedAt ?? null,
       lifecycleRunIds: a.lifecycle.map((r) => r.id),
-      ...exportMetrics(a.lifecycle),
+      ...comparisonMetrics(a.lifecycle),
       timeToAcceptedMinutes: a.elapsedMinutes,
       timeBasis:
         a.slice.timeToAcceptedMinutes !== undefined
@@ -507,7 +637,11 @@ export function comparisonExport(
       usageMeter:
         'Percentage points consumed: remaining before minus remaining after; explicit burn overrides. Increases or a reported reset make inferred burn unknown.',
       cohort:
-        'Slice filters select eligible slices. When run filters are active, at least one run must match all run filters to qualify its slice. Full relevant lifecycle cost is retained for each qualifying accepted slice.',
+        'Slice filters select eligible slices. A run must match every active run filter and at least one selected stage scope (if any) to qualify its slice. Full relevant lifecycle cost is retained for each qualifying accepted slice.',
+      candidates:
+        'Selected Model Configuration keys partition scoped observed runs in selection order; they do not filter the base cohort or attribute accepted economics. Empty candidates have no evidence, not free work.',
+      stages:
+        'Role scopes match structured role exactly. Run type scopes match exact recorded text, without normalization or inferred Re-critic/Verification. No scopes means all otherwise matching runs.',
       acceptance:
         'Runs starting by acceptance, plus undated runs; without a cutoff, all runs. Evidence includes later evaluation.',
       findings:

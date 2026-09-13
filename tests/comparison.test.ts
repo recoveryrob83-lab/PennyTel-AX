@@ -2,20 +2,319 @@ import { describe, expect, it } from 'vitest'
 import {
   compareData,
   comparisonExport,
+  comparisonMetrics,
+  MAX_COMPARISON_CANDIDATES,
+  MAX_COMPARISON_STAGE_SCOPES,
+  MAX_RUN_TYPE_SCOPE_LENGTH,
+  stageScopeOptions,
   selectCohort,
   validateComparisonRequest,
-  type ComparisonContext
+  type ComparisonContext,
+  type StageScope
 } from '../src/shared/comparison'
 import { mergeImport, validateDataset } from '../src/shared/data'
 import { emptyDataset } from '../src/shared/types'
 import { comparisonFixture, runFixture } from './fixtures'
-import { MAX_DERIVED_IDENTITY_LENGTH } from '../src/shared/configuration'
+import { MAX_DERIVED_IDENTITY_LENGTH, modelConfiguration } from '../src/shared/configuration'
+import { configurationFixture } from './configuration-fixtures'
+import { version } from '../package.json'
 
 const context: ComparisonContext = {
   filters: { model: 'QA Astra', role: 'Implementer' },
   groupBy: 'role',
   sort: 'cost'
 }
+const workspace: ComparisonContext = { filters: {}, groupBy: 'modelConfiguration', sort: 'label' }
+describe('real comparison workspace', () => {
+  it('partitions canonical configurations in selection order, independently of ordinary filters and group navigation', () => {
+    const data = configurationFixture()
+    const selectedCandidates = [0, 4, 2, 5, 3].map(
+      (index) => modelConfiguration(data, data.runs[index]).key
+    )
+    const base = compareData(data, workspace)
+    const context = {
+      ...workspace,
+      selectedCandidates,
+      groupBy: 'role' as const,
+      sort: 'cost' as const,
+      selectedGroup: 'Repair'
+    }
+    const view = compareData(data, context)
+    expect(view.candidates.map((c) => c.runs.map((r) => r.id))).toEqual([
+      ['low', 'alias-low'],
+      ['luna'],
+      ['xhigh'],
+      ['sol'],
+      ['unknown']
+    ])
+    expect(view.candidates.map((c) => c.key)).toEqual(selectedCandidates)
+    expect(view.candidates[2].key).toContain('ExtraHigh')
+    expect(view.candidates[2].label).toContain('ExtraHigh / XHigh')
+    expect(view.candidates[4].label).toContain('Unknown')
+    expect(view.candidates[4].key).toContain('null')
+    expect(view.runs).toEqual(base.runs)
+    expect(view.accepted).toEqual(base.accepted)
+    expect(view.shownRuns.map((r) => r.id)).toEqual(['sol'])
+    const filtered = compareData(data, { ...context, filters: { role: 'Critic' } })
+    expect(filtered.candidates.map((c) => c.metrics.runCount)).toEqual([0, 1, 0, 0, 0])
+    expect(filtered.candidates[0].metrics.costUSD.knownTotal).toBeNull()
+    expect(filtered.accepted).toEqual(base.accepted)
+    expect(compareData(data, context)).toEqual(view)
+  })
+  it.each([
+    ['Implementer', ['low', 'alias-low', 'xhigh', 'unknown']],
+    ['Critic', ['luna']],
+    ['Repair', ['sol']]
+  ] as const)('scopes %s using structured role evidence, not run type text', (value, ids) => {
+    const data = configurationFixture() // all recorded run types are Implementation
+    const view = compareData(data, { ...workspace, stageScopes: [{ kind: 'role', value }] })
+    expect(view.runs.map((r) => r.id)).toEqual(ids)
+    expect(view.accepted[0].lifecycle).toEqual(data.runs)
+  })
+  it('ORs stage scopes and ANDs them with same-run filters, qualifying only scoped slices', () => {
+    const data = comparisonFixture()
+    const stageScopes: StageScope[] = [
+      { kind: 'role', value: 'Implementer' },
+      { kind: 'role', value: 'Repair' }
+    ]
+    const view = compareData(data, { ...workspace, stageScopes, filters: { model: 'QA Astra' } })
+    expect(view.runs.map((r) => r.id)).toEqual(['astra-impl'])
+    expect(view.slices.map((s) => s.id)).toEqual(['mixed'])
+    expect(view.accepted[0].stats.cost).toBe(6)
+    const scoped = compareData(data, { ...workspace, stageScopes })
+    expect(scoped.runs.every((r) => r.role === 'Implementer' || r.role === 'Repair')).toBe(true)
+    expect(scoped.runs.some((r) => r.role === 'Repair')).toBe(true)
+    expect(scoped.slices.some((s) => s.id === 'empty')).toBe(false)
+    expect(compareData(data, workspace).slices.some((s) => s.id === 'empty')).toBe(true)
+  })
+  it('offers only recorded exact run types, preserving spelling, whitespace and mixed scope semantics', () => {
+    const data = configurationFixture()
+    expect(stageScopeOptions(data).filter((s) => s.kind === 'runType')).toEqual([
+      { kind: 'runType', value: 'Implementation' }
+    ])
+    data.runs[0].runType = 'Re-critic'
+    data.runs[1].runType = 'Verification'
+    data.runs[2].runType = 'verification'
+    data.runs[3].runType = ' Verification '
+    validateDataset(data)
+    const scopes: StageScope[] = [
+      { kind: 'runType', value: 'Verification' },
+      { kind: 'runType', value: 'Re-critic' }
+    ]
+    const view = compareData(data, { ...workspace, stageScopes: scopes })
+    expect(view.runs.map((r) => r.id)).toEqual(['low', 'alias-low'])
+    expect(stageScopeOptions(data)).toEqual(
+      expect.arrayContaining([...scopes, { kind: 'runType', value: ' Verification ' }])
+    )
+    expect(
+      compareData(data, {
+        ...workspace,
+        stageScopes: [...scopes, { kind: 'role', value: 'Critic' }]
+      }).runs.map((r) => r.id)
+    ).toEqual(['low', 'alias-low', 'luna'])
+    expect(
+      compareData(data, { ...workspace, stageScopes: scopes, filters: { role: 'Repair' } }).runs
+    ).toEqual([])
+  })
+  it('exports colliding identities separately, complete workspace state and shared evidence without changing source', () => {
+    const data = configurationFixture()
+    data.runs.push(
+      ...['a', 'b'].map((id) => ({
+        ...data.runs[0],
+        id,
+        modelId: `missing-${id}`,
+        model: 'Same',
+        priceSnapshot: undefined,
+        runType: 'Verification'
+      }))
+    )
+    const selectedCandidates = data.runs.slice(-2).map((run) => modelConfiguration(data, run).key)
+    data.findings = [
+      {
+        id: 'found',
+        sliceId: 'slice-test',
+        runId: 'a',
+        severity: 'P1',
+        category: 'Test Gap',
+        description: 'Recorded finding'
+      }
+    ]
+    data.discoveries = [
+      {
+        id: 'discovery',
+        sliceId: 'slice-test',
+        runId: 'a',
+        description: 'Pending observation',
+        validation: 'Pending'
+      }
+    ]
+    validateDataset(data)
+    const bytes = JSON.stringify(data)
+    const context: ComparisonContext = {
+      filters: { role: 'Implementer' },
+      groupBy: 'role',
+      sort: 'time',
+      selectedGroup: 'Implementer',
+      selectedCandidates,
+      stageScopes: [{ kind: 'runType', value: 'Verification' }]
+    }
+    const view = compareData(data, context)
+    const output = comparisonExport(
+      data,
+      { revision: data.revision, context },
+      version,
+      '2026-09-13T00:00:00Z'
+    )
+    expect(output.context).toEqual(context)
+    expect(output.candidates.map((c) => c.key)).toEqual(selectedCandidates)
+    expect(output.candidates.map((c) => c.label)).toEqual(['Same — Low [1]', 'Same — Low [2]'])
+    expect(output.candidates.map((c) => c.runIds)).toEqual([['a'], ['b']])
+    expect(output.candidates.map((c) => c.metrics)).toEqual(view.candidates.map((c) => c.metrics))
+    expect(output.candidates[0].findings).toEqual(data.findings)
+    expect(output.candidates[0].discoveries).toEqual(data.discoveries)
+    expect(output.candidates[1].findings).toEqual([])
+    expect(output.candidates[0].sliceDispositions.counts).toEqual([{ value: 'Accepted', count: 1 }])
+    expect(output.acceptedSlices[0].lifecycleRunIds).toHaveLength(data.runs.length)
+    expect(JSON.stringify(data)).toBe(bytes)
+    expect(() =>
+      comparisonExport(
+        data,
+        { revision: data.revision + 1, context },
+        version,
+        '2026-09-13T00:00:00Z'
+      )
+    ).toThrow('changed')
+    expect(() => mergeImport(emptyDataset(), JSON.stringify(output))).toThrow(
+      'not importable telemetry'
+    )
+    expect(mergeImport(emptyDataset(), bytes).data.runs).toEqual(data.runs)
+    expect(output.app.version).toBe('0.1.2')
+  })
+  it('keeps empty candidates and partially priced/timed/cache/meter measurements honest', () => {
+    const data = configurationFixture()
+    const known = { ...data.runs[0], wallMinutes: 0, usageBefore: 90, usageAfter: 87 }
+    const partial = {
+      ...known,
+      id: 'partial',
+      inputTokens: undefined,
+      reasoningTokens: undefined,
+      wallMinutes: undefined,
+      startAt: undefined,
+      endAt: undefined,
+      usageReset: true
+    }
+    const metrics = comparisonMetrics([known, partial])
+    expect(metrics.costUSD).toMatchObject({
+      knownTotal: comparisonMetrics([known]).costUSD.knownTotal,
+      completeTotal: null,
+      recorded: 1,
+      total: 2
+    })
+    expect(metrics.meanPricedRunCostUSD).toBe(metrics.costUSD.knownTotal)
+    expect(metrics.wallMinutes).toMatchObject({
+      knownTotal: 0,
+      completeTotal: null,
+      recorded: 1,
+      total: 2
+    })
+    expect(metrics.usageBurnPercentagePoints).toMatchObject({
+      knownTotal: 3,
+      recorded: 1,
+      complete: false
+    })
+    expect(metrics.cache).toMatchObject({ knownRuns: 1, totalRuns: 2, complete: false })
+    expect(comparisonMetrics([{ ...known, reasoningTokens: 0 }]).costUSD).toEqual(
+      comparisonMetrics([known]).costUSD
+    )
+    expect(
+      comparisonMetrics([
+        { ...known, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0 }
+      ]).costUSD.knownTotal
+    ).toBe(0)
+    expect(
+      comparisonMetrics([{ ...known, inputTokens: 0, cachedInputTokens: 0 }]).cache.ratio
+    ).toBeNull()
+    expect(
+      comparisonMetrics([{ ...known, usageAfter: 99 }, partial]).usageBurnPercentagePoints
+        .knownTotal
+    ).toBeNull()
+    expect(
+      comparisonMetrics([{ ...partial, usageBurn: 0 }]).usageBurnPercentagePoints.knownTotal
+    ).toBe(0)
+    const selectedCandidates = [modelConfiguration(data, data.runs[4]).key]
+    const empty = compareData(data, {
+      ...workspace,
+      selectedCandidates,
+      stageScopes: [{ kind: 'role', value: 'Repair' }]
+    }).candidates[0]
+    expect(empty.label).toBe('GPT-5.6 Luna — Max')
+    expect(empty.metrics.runCount).toBe(0)
+    for (const value of [
+      empty.metrics.costUSD,
+      empty.metrics.wallMinutes,
+      ...Object.values(empty.metrics.evidence.numeric)
+    ])
+      expect(value).toMatchObject({ knownTotal: null, recorded: 0, total: 0, complete: false })
+  })
+  it('validates bounded canonical keys and stage unions, including duplicate, malformed and oversized state', () => {
+    const candidate = (id: string): string => JSON.stringify([JSON.stringify(['model', id]), 'Low'])
+    const request = (state: Record<string, unknown>): unknown => ({
+      revision: 0,
+      context: { ...workspace, ...state }
+    })
+    const candidates = Array.from({ length: MAX_COMPARISON_CANDIDATES }, (_, i) =>
+      candidate(String(i))
+    )
+    const stages = Array.from({ length: MAX_COMPARISON_STAGE_SCOPES }, (_, i) => ({
+      kind: 'runType',
+      value: String(i)
+    }))
+    expect(() =>
+      validateComparisonRequest(request({ selectedCandidates: candidates, stageScopes: stages }))
+    ).not.toThrow()
+    for (const selectedCandidates of [
+      null,
+      'x',
+      [null],
+      [''],
+      ['Astra — Low'],
+      [candidate('a'), candidate('a')],
+      [...candidates, candidate('extra')],
+      ['x'.repeat(MAX_DERIVED_IDENTITY_LENGTH + 1)],
+      [JSON.stringify([JSON.stringify(['model', 'a']), 'XHigh'])],
+      [JSON.stringify([JSON.stringify(['family', 'a']), 'Low'])],
+      [candidate('a'.repeat(100_001))],
+      Array(1)
+    ])
+      expect(() => validateComparisonRequest(request({ selectedCandidates }))).toThrow('candidate')
+    for (const stageScopes of [
+      null,
+      'Critic',
+      [null],
+      [{}],
+      [{ kind: 'role', value: 'Verification' }],
+      [{ kind: 'role', value: 'toString' }],
+      [{ kind: 'runType', value: '' }],
+      [{ kind: 'runType', value: ' ' }],
+      [{ kind: 'runType', value: 1 }],
+      [{ kind: 'runType', value: 'x', extra: true }],
+      [{ kind: 'stage', value: 'Repair' }],
+      [stages[0], { value: '0', kind: 'runType' }],
+      [...stages, { kind: 'runType', value: 'extra' }],
+      [{ kind: 'runType', value: 'x'.repeat(MAX_RUN_TYPE_SCOPE_LENGTH + 1) }],
+      Array(1)
+    ])
+      expect(() => validateComparisonRequest(request({ stageScopes }))).toThrow('stage')
+    expect(() =>
+      validateComparisonRequest(
+        request({
+          stageScopes: [{ kind: 'runType', value: 'x'.repeat(MAX_RUN_TYPE_SCOPE_LENGTH) }],
+          selectedCandidates: [candidate('a'.repeat(100_000))]
+        })
+      )
+    ).not.toThrow()
+  })
+})
 describe('bounded comparison and non-importable analysis export', () => {
   it('bounds derived requests separately while retaining source field limits', () => {
     for (const [dimension, limit] of [
