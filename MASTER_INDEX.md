@@ -1,7 +1,8 @@
 # PennyTel repository map
 
-Evidence-based map of the repository at `main` baseline
-`1f862010c34ffb5515f75a9f24127c5356b9d817`. This is a navigation aid for
+Evidence-based map of the repository at accepted Slice 2 candidate
+`04ccb200b02982b774ce07308d6a280c1f666d47` (product baseline
+`43d1fe9674e47441c84855d45e3b7a69b9c7c300`). This is a navigation aid for
 future slices, not a replacement for the assigned GitHub Issue or the
 authoritative contracts in `docs/`.
 
@@ -60,7 +61,9 @@ implementation work.
   snapshot, holds page/selection/modal state, routes mutations with the
   loaded dataset revision, and coordinates the page components and shared
   editors/details. Startup errors remain a non-writable error state; there is
-  no browser-storage fallback.
+  no browser-storage fallback. It imports the canonical package version and
+  displays it in the sidebar/header so UI version routing stays aligned with
+  the main-process comparison export metadata.
 - Renderer code receives a `Dataset` snapshot and asks the preload API for
   mutations. It does not become authoritative for persistence or pricing
   snapshots.
@@ -138,6 +141,11 @@ evidence blocks loading/writing rather than silently starting empty.
 - Raw dataset export reads the main-owned snapshot. Comparison export is a
   distinct derived artifact with `kind: "pennytel-comparison"` and is not
   importable.
+- [`docs/comparison-export.md`](docs/comparison-export.md) documents the
+  additive analysis-v1 configuration dimensions and their identity-key versus
+  presentation-label semantics. Comparison export receives only revision and
+  context from the renderer; the main process derives the view from its own
+  snapshot and records the package app version.
 - `writeExport()` resolves aliases and protected identities, rejects live or
   backup destinations and unsafe filesystem identities, writes through a
   temporary file, and atomically replaces a regular destination.
@@ -213,19 +221,44 @@ The bundled seed is statically imported by `src/main/store.ts` from
   all-unpriced role as zero;
   `acceptanceRuns()` includes runs starting by acceptance plus undated runs;
   `timeToAccepted()` uses an operator measurement or first recorded run start;
-  `groupRuns()` supports model, thinking, role, slice, candidate, workflow,
-  session/context, local hour, and weekday groupings.
+  `groupRuns()` supports derived `modelConfiguration`, `canonicalModel`, and
+  recorded `modelFamily` dimensions in addition to model, thinking, role,
+  slice, candidate, workflow, session/context, local hour, and weekday
+  groupings.
+- [`src/shared/configuration.ts`](src/shared/configuration.ts) owns the shared
+  derived comparison identity path. `modelIdentity()` uses a valid recorded
+  registry model ID first, otherwise the existing evidence-based
+  `resolveIdentity()` rules; unresolved IDs and exact recorded model text stay
+  distinct rather than being guessed into a registered identity.
+  `modelConfiguration()` combines that canonical-or-unresolved model identity
+  with the recorded `Run.thinking` value. Missing thinking is displayed as
+  `Unknown` and is never inferred from registry capabilities. Recorded
+  `ExtraHigh` remains the raw/key value and is presented as `ExtraHigh / XHigh`.
+  `derivedRunIdentity()` and `derivedRunLabels` also define the canonical-model
+  rollup and exact recorded-family dimension.
+- `derivedPresentationLabels()` gives dataset-wide, deterministic collision-safe
+  operator labels (including ordinal suffixes where necessary). Labels are not
+  identities: derived JSON keys are used for grouping, filtering, selected
+  evidence, and export. `MAX_DERIVED_IDENTITY_LENGTH` gives derived keys a
+  bounded request-validation budget without changing ordinary source-field
+  limits.
 - [`src/shared/comparison.ts`](src/shared/comparison.ts) is the comparison
   orchestration layer:
-  `selectCohort()` intersects slice filters and run filters;
+  `runFilterIdentity()`/`runFilterOptions()` share the configuration derivation
+  and keyed presentation options with the renderer; `selectCohort()` compares
+  derived filter keys as well as source fields;
   when any run filter is active, one run must satisfy all active run filters for
   a slice to qualify, but qualifying accepted slices retain their full
   acceptance lifecycle across models and roles;
   `compareData()` derives group summaries, evidence, findings, validated
   discoveries, quality distributions, selected evidence, and accepted
-  economics;
-  `comparisonExport()` derives the same view in the main process after checking
-  the request revision and emits a reproducible non-importable analysis object.
+  economics using the same keys and labels; `modelConfiguration` is the
+  default Compare grouping while `canonicalModel`, `modelFamily`, existing
+  exact `model`, and `thinking` preserve useful rollups;
+  `validateComparisonRequest()` admits the derived dimensions and bounds their
+  encoded selections/filters separately; `comparisonExport()` derives the
+  same view in the main process after checking the request revision and emits
+  a reproducible non-importable analysis object.
 - Defect counts exclude dismissed findings and observations but preserve
   repaired defects. Findings attribute discovery to a linked run, not blame to
   a model. Validated autonomous discovery requires
@@ -248,6 +281,8 @@ The bundled seed is statically imported by `src/main/store.ts` from
 - [`src/renderer/src/pages/Compare.tsx`](src/renderer/src/pages/Compare.tsx)
   owns comparison view controls: group-by, sort, cohort filters, group
   selection, underlying runs, accepted-slice economics, and comparison export.
+  It defaults to Model Configuration and uses shared keyed options so
+  collision-safe labels remain stable through filtering and export.
 - [`src/renderer/src/pages/Data.tsx`](src/renderer/src/pages/Data.tsx) shows
   the storage path, exports raw JSON, accepts pasted/file JSON, previews counts
   and skips, and commits only after the user confirms.
@@ -271,6 +306,10 @@ The bundled seed is statically imported by `src/main/store.ts` from
   and [`src/renderer/src/pages/Data.tsx`](src/renderer/src/pages/Data.tsx) are
   deliberately separate management surfaces for legacy prices, registry
   documents, and portability.
+- [`src/renderer/src/App.tsx`](src/renderer/src/App.tsx) and the main-process
+  package metadata share the `package.json` version source; the sidebar/header
+  display and `comparisonExport()` app metadata therefore remain aligned at
+  version `0.1.1` for this candidate.
 
 ## Tests by architectural area
 
@@ -284,13 +323,16 @@ under `tests/**/*.test.{ts,tsx}`.
 | Registry contract and pricing authority | [`tests/registry.test.ts`](tests/registry.test.ts), [`tests/registry-fixtures.ts`](tests/registry-fixtures.ts) | Canonical seed, strict registry validation, identity ambiguity, dated/exclusive pricing, backfill, v1 portability, legacy migration/precedence, referenced identity retention |
 | Durable storage and recovery | [`tests/store.test.ts`](tests/store.test.ts), [`tests/registry-store.test.ts`](tests/registry-store.test.ts) | New/existing profiles, live/backup recovery evidence, external changes, atomic replacement failure, serialized/stale writers, registry startup and persisted backfill |
 | Filesystem-safe export | [`tests/export.test.ts`](tests/export.test.ts) | Regular destinations, live/backup aliases, links, dangling/unresolvable identities, raw and comparison output |
-| Comparison calculations/export | [`tests/comparison.test.ts`](tests/comparison.test.ts) | Cohort qualification, full lifecycle retention, filters/grouping/order/selection, evidence categories, quality, unknown coverage, stale/untrusted export requests |
-| Renderer comparison | [`tests/compare-ui.test.tsx`](tests/compare-ui.test.tsx) | Shared cohort context, export payload, export failure state |
+| Configuration identity and comparison | [`tests/configuration.test.ts`](tests/configuration.test.ts), [`tests/configuration-fixtures.ts`](tests/configuration-fixtures.ts), [`tests/comparison.test.ts`](tests/comparison.test.ts) | Canonical/alias identity, recorded thinking and Unknown behavior, ExtraHigh/XHigh presentation, collision-safe labels and bounded derived requests, grouping/filtering/selection/export, raw import and historical cost/snapshot stability |
+| Comparison calculations/export | [`tests/comparison.test.ts`](tests/comparison.test.ts) | Cohort qualification, full lifecycle retention, source and derived filters/grouping/order/selection, evidence categories, quality, unknown coverage, stale/untrusted export requests |
+| Renderer comparison | [`tests/compare-ui.test.tsx`](tests/compare-ui.test.tsx) | Shared cohort context, configuration choices/rollups/collision labels, keyed export payload, export failure state, canonical version display across pages |
 | Renderer editors/startup | [`tests/editor.test.tsx`](tests/editor.test.tsx) | Acceptance editing, local/exact timestamps, drafts, failed saves, unknown booleans, discard, same-slice relationship choices, startup failure |
 | Renderer registry | [`tests/registry-ui.test.tsx`](tests/registry-ui.test.tsx) | Metadata/benchmark display, invalid-update rejection, editable failed draft, preview/install handoff |
 
 Fixtures live in [`tests/fixtures.ts`](tests/fixtures.ts) and
-[`tests/registry-fixtures.ts`](tests/registry-fixtures.ts). The store tests
+[`tests/registry-fixtures.ts`](tests/registry-fixtures.ts), with configuration
+fixtures in [`tests/configuration-fixtures.ts`](tests/configuration-fixtures.ts).
+The store tests
 mock selected filesystem operations to exercise failure windows; the Electron
 scripts exercise the real main/preload/renderer/filesystem path.
 
@@ -312,10 +354,17 @@ scripts exercise the real main/preload/renderer/filesystem path.
   scripts in this order: [`scripts/electron-smoke.mjs`](scripts/electron-smoke.mjs),
   [`scripts/electron-repair-qa.mjs`](scripts/electron-repair-qa.mjs),
   [`scripts/electron-new-profile-qa.mjs`](scripts/electron-new-profile-qa.mjs),
-  and [`scripts/electron-registry-qa.mjs`](scripts/electron-registry-qa.mjs).
+  [`scripts/electron-registry-qa.mjs`](scripts/electron-registry-qa.mjs), and
+  [`scripts/electron-configuration-qa.mjs`](scripts/electron-configuration-qa.mjs).
   They use Playwright's Electron driver, isolated temporary
-  `test-results/electron-qa-*`/repair/new-profile/registry profiles, real IPC,
+  `test-results/electron-qa-*`/repair/new-profile/registry/configuration-runtime-*
+  profiles, real IPC,
   disk, restart, import/export, registry, recovery, and narrow-window checks.
+- `electron-configuration-qa.mjs` uses a synthetic isolated profile and the
+  real Electron path to prove known configurations, aliases, thinking
+  `Unknown`, `ExtraHigh / XHigh` presentation, canonical/family/model rollups,
+  collision-safe keyed filtering and export, frozen raw bytes/costs across
+  raw export and restart, and visible package version behavior.
 - [`scripts/electron-qa-capture.mjs`](scripts/electron-qa-capture.mjs) restores
   and focuses the isolated native QA window before screenshots. A working
   desktop surface is required; Electron runtime behavior is authoritative for
@@ -338,6 +387,12 @@ scripts exercise the real main/preload/renderer/filesystem path.
   through model/provider/date/identity changes or all three rate overrides.
 - Registered identity and pricing never silently fall back through ambiguity;
   missing telemetry remains unknown rather than zero or inferred.
+- Model Configuration is derived analysis identity, not a persisted Run field:
+  canonical model identity and recorded thinking are combined without schema
+  migration, source rewriting, snapshot mutation, or price recalculation.
+  Missing thinking remains Unknown even when registry capabilities list an
+  effort; `ExtraHigh / XHigh` is presentation only. Derived labels must not
+  replace the collision-safe keys used by grouping/filtering/export.
 - Raw dataset export is canonical/importable; comparison export is derived and
   explicitly non-importable. Export destinations may not alias live/backup
   storage.
@@ -356,9 +411,12 @@ scripts exercise the real main/preload/renderer/filesystem path.
 - Registry evolution should use the complete JSON parse/validate/update path
   in `src/shared/registry.ts` and `registry-import`; referenced IDs and frozen
   snapshot provenance constrain replacement documents.
-- New comparison dimensions can extend `GroupBy`, filter labels, cohort
+- New comparison dimensions should extend the shared derivation in
+  `src/shared/configuration.ts` first, then `GroupBy`/filter labels, keyed cohort
   selection, shared `compareData`, and the corresponding analysis export, with
-  UI and unit-test coverage kept on the same shared derivation.
+  UI and unit-test coverage kept on the same path. Do not duplicate
+  model/thinking identity composition in the renderer or persist a redundant
+  configuration field without an authoritative schema change.
 - New pages should be routed in `App.tsx` and consume the loaded `Dataset`
   through existing callbacks; persistence authority should not move into page
   components.
