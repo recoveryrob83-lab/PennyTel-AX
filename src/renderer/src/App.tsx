@@ -9,6 +9,7 @@ import { Compare } from './pages/Compare'
 import { Pricing } from './pages/Pricing'
 import { Registry } from './pages/Registry'
 import { Data } from './pages/Data'
+import { version as appVersion } from '../../../package.json'
 
 type Page = 'slices' | 'compare' | 'pricing' | 'registry' | 'data'
 async function readLocalData(): Promise<LoadedData> {
@@ -108,6 +109,7 @@ export default function App(): React.JSX.Element {
           P<span>t</span>
         </div>
         <h1>PennyTel</h1>
+        <p className="version">PennyTel v{appVersion}</p>
         {error ? (
           <>
             <p className="error" role="alert">
@@ -165,7 +167,7 @@ export default function App(): React.JSX.Element {
             <small> known API-equivalent</small>
           </p>
           <div className="version">
-            PennyTel v0.1 <span>Local first</span>
+            PennyTel v{appVersion} <span>Local first</span>
           </div>
         </div>
       </aside>

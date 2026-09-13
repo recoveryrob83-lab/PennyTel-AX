@@ -1,4 +1,10 @@
 import type { Dataset, Discovery, Pricing, Role, Run, Slice } from './types'
+import {
+  derivedRunIdentity,
+  derivedRunLabels,
+  derivedPresentationLabels,
+  type DerivedRunDimension
+} from './configuration'
 
 export const money = (value: number | null): string =>
   value === null
@@ -166,6 +172,7 @@ export function acceptanceRuns(slice: Slice, runs: Run[]): Run[] {
     : runs
 }
 export type GroupBy =
+  | DerivedRunDimension
   | 'model'
   | 'thinking'
   | 'role'
@@ -177,6 +184,7 @@ export type GroupBy =
   | 'localHour'
   | 'dayOfWeek'
 export const groupLabels: Record<GroupBy, string> = {
+  ...derivedRunLabels,
   model: 'Exact model',
   thinking: 'Thinking level',
   role: 'Factory role',
@@ -194,7 +202,18 @@ export function groupRuns(
   groupBy: GroupBy
 ): { key: string; label: string; runs: Run[] }[] {
   const groups = new Map<string, { key: string; label: string; runs: Run[] }>()
+  const labels =
+    groupBy in derivedRunLabels
+      ? derivedPresentationLabels(data, groupBy as DerivedRunDimension)
+      : undefined
   for (const run of runs) {
+    if (groupBy in derivedRunLabels) {
+      const identity = derivedRunIdentity(data, run, groupBy as DerivedRunDimension)
+      if (!groups.has(identity.key))
+        groups.set(identity.key, { ...identity, label: labels!.get(identity.key)!, runs: [] })
+      groups.get(identity.key)!.runs.push(run)
+      continue
+    }
     const slice = data.slices.find((s) => s.id === run.sliceId)!
     const value =
       groupBy === 'slice'
@@ -205,7 +224,7 @@ export function groupRuns(
             ? run.candidate
               ? `${slice.id} / ${run.candidate}`
               : undefined
-            : run[groupBy]
+            : run[groupBy as Exclude<GroupBy, DerivedRunDimension | 'slice' | 'productionModel'>]
     const key = String(value ?? 'Unknown')
     const label = groupBy === 'slice' ? slice.title : key
     if (!groups.has(key)) groups.set(key, { key, label, runs: [] })

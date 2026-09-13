@@ -3,6 +3,7 @@ import type { Dataset, Run } from '../../../shared/types'
 import {
   compareData,
   runFilterLabels,
+  runFilterOptions,
   sliceFilterLabels,
   type ComparisonFilters,
   type ComparisonSort,
@@ -12,6 +13,7 @@ import { burnLabel, displayTimestamp, qualityLabel } from '../../../shared/prese
 import { duration, groupLabels, money, percent, type GroupBy } from '../../../shared/metrics'
 import { Empty, Metric } from '../components/ui'
 import { RunTable } from '../components/RunTable'
+import type { ComparisonIdentity } from '../../../shared/configuration'
 
 interface Props {
   data: Dataset
@@ -19,7 +21,7 @@ interface Props {
   onOpenSlice: (id: string) => void
 }
 export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Element {
-  const [groupBy, setGroupBy] = useState<GroupBy>('model')
+  const [groupBy, setGroupBy] = useState<GroupBy>('modelConfiguration')
   const [filters, setFilters] = useState<ComparisonFilters>({})
   const [selected, setSelected] = useState<string>()
   const [sort, setSort] = useState<ComparisonSort>('label')
@@ -48,22 +50,24 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
   const sliceKeys = Object.keys(sliceFilterLabels) as (keyof typeof sliceFilterLabels)[]
   const runKeys = Object.keys(runFilterLabels) as (keyof typeof runFilterLabels)[]
   const knownMax = Math.max(...groups.map((g) => g.stats.cost), 0)
-  const filterOptions: [FilterKey, string, string[]][] = [
+  const filterOptions: [FilterKey, string, ComparisonIdentity[]][] = [
     ...sliceKeys.map(
       (k) =>
         [
           k,
           sliceFilterLabels[k],
-          [...new Set(data.slices.map((s) => String(s[k] ?? '')).filter(Boolean))].sort()
-        ] as [FilterKey, string, string[]]
+          [...new Set(data.slices.map((s) => String(s[k] ?? '')).filter(Boolean))]
+            .sort()
+            .map((value) => ({ key: value, label: value }))
+        ] as [FilterKey, string, ComparisonIdentity[]]
     ),
     ...runKeys.map(
       (k) =>
-        [
-          k,
-          runFilterLabels[k],
-          [...new Set(data.runs.map((r) => String(r[k] ?? '')).filter(Boolean))].sort()
-        ] as [FilterKey, string, string[]]
+        [k, runFilterLabels[k], runFilterOptions(data, k)] as [
+          FilterKey,
+          string,
+          ComparisonIdentity[]
+        ]
     )
   ]
   return (
@@ -153,7 +157,9 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
                 >
                   <option value="">All</option>
                   {options.map((o) => (
-                    <option key={o}>{o}</option>
+                    <option key={o.key} value={o.key}>
+                      {o.label}
+                    </option>
                   ))}
                 </select>
               </label>
