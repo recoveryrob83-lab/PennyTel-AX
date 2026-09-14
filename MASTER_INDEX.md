@@ -11,14 +11,15 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - v1 data contract and field semantics: [`docs/data-contract.md`](docs/data-contract.md)
 - Registry contract and update behavior: [`docs/model-registry.md`](docs/model-registry.md)
 - Comparison analysis contract: [`docs/comparison-export.md`](docs/comparison-export.md)
+- Active Slice 4 repository map: [`docs/context-maps/Slice_4_Accepted_Outcome_Economics_Context_Map.md`](docs/context-maps/Slice_4_Accepted_Outcome_Economics_Context_Map.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
 - Canonical registry input: [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json)
 - Runtime/verification record: [`docs/verification.md`](docs/verification.md) and [`docs/bounded-repair-verification.md`](docs/bounded-repair-verification.md)
 
-The root [`SLICE_CONTEXT_PACKET.md`](SLICE_CONTEXT_PACKET.md) is an advisory
-execution-context artifact. Do not treat its contents as authoritative beyond
-the slice it names; the assigned GitHub Issue remains authoritative for slice
-behavior and scope.
+Slice-specific repository maps live under [`docs/context-maps/`](docs/context-maps/).
+The assigned GitHub Issue is the executable slice contract and points to its
+companion map. `AGENTS.md` owns worker-role behavior. Start from the companion
+map and use this master index when broader repository geography is needed.
 
 ## Runtime ownership and boundaries
 
@@ -470,6 +471,6 @@ scripts exercise the real main/preload/renderer/filesystem path.
   or Sheet synchronization, or statistical-significance machinery in this
   repository. Unknown telemetry is intentionally not reconstructed.
 - The authoritative behavioral contract for any future slice remains its
-  assigned GitHub Issue. Reconcile this index and prepare a fresh
-  worktree-local `SLICE_CONTEXT_PACKET.md` when a predecessor slice changes
-  these surfaces.
+  assigned GitHub Issue. Begin slice-specific source discovery from the Issue's
+  companion context map. Use this index only when broader repository geography
+  is needed or when source evidence proves the companion map stale or incomplete.
