@@ -2,74 +2,259 @@
 
 ## Purpose
 
-This file gives repository-level operating guidance to engineering workers.
+This file defines durable repository operating guidance for PennyTel engineering workers.
 
-Keep this guidance small and durable. Slice-specific requirements belong in the assigned GitHub Issue and the worktree-local context packet, not here.
+It owns **how repository roles behave**. It does not own slice-specific product requirements or repository geography.
 
-## Context-First Rule
+Keep it generic, durable, and role-oriented. Do not copy a slice contract or context map into this file.
 
-Before broad repository exploration, use the prepared context in this order:
+## Information Ownership
 
-1. Read `MASTER_INDEX.md` in the repository root.
-2. Read `SLICE_CONTEXT_PACKET.md` in the top level of the current worktree.
-3. Read the assigned GitHub Issue. The Issue is the authoritative slice contract for objective, required behavior, acceptance criteria, constraints, and non-goals.
-4. Start repository inspection with the files, symbols, tests, invariants, and neighboring surfaces identified by the Master Index and Slice Context Packet.
-5. Expand into the rest of the repository only when the current evidence shows that more context is needed.
+Use each source for one job:
 
-The needed context packet is in the top-level worktree folder.
+- **Assigned GitHub child Issue = WHAT** — authoritative executable slice contract: mission, required behavior, constraints, acceptance, non-goals, STOP/escalation conditions, version target, and completion condition.
+- **Companion Slice Context Map = WHERE** — slice-specific repository geography: relevant files, symbols, dependencies, tests, runtime surfaces, hazards, and genuine repository unknowns.
+- **`AGENTS.md` = HOW** — worker-role behavior and repository operating rules.
+- **`MASTER_INDEX.md` = REST OF REPO** — broader repository atlas, architectural ownership, shared hazards, and task routing outside the slice map.
+- **Dispatch prompt = GO** — role, assigned Issue, worktree/branch/candidate identity, session-specific exceptions or permissions, and required return.
+- **Source code, tests, git state, and runtime evidence = implementation reality.**
 
-This is a context-efficiency rule, not a file-access restriction. The Slice Context Packet is an advisory starting working set. If implementation evidence, dependencies, tests, call sites, runtime behavior, or architecture require additional files, inspect them.
+`SLICE_CONTEXT_PACKET.md` is retired. Do not create, copy, read, or require a top-level packet for new work.
 
-### Why this rule exists
+### Context-first rule
 
-The goal is to keep context trawl low and input tokens efficient.
+For a normal slice worker:
 
-Avoid reading the whole repository by default. Broad reads create unnecessary input-token cost, truncated tool output, repeated file reads, and reconstruction work. Start from the repo map and slice-specific working set, then widen only when needed.
+1. Read this `AGENTS.md`.
+2. Read the assigned GitHub child Issue.
+3. Follow the Issue's companion Context Map and start inspection from its mapped files/symbols/tests.
+4. Inspect source evidence along that dependency chain.
+5. Read `MASTER_INDEX.md` only when the Context Map is missing, stale, insufficient, or source evidence expands into repository territory the map does not cover.
+6. Broaden further only to answer a named unresolved dependency, failure, invariant, or acceptance question.
 
-## Context and Authority
+The Context Map is a search prior, not a cage. The Issue remains authoritative if a map is wrong or stale.
 
-Use these sources for different purposes:
+Avoid broad repository crawls by default. Stop searching when the current decision has sufficient evidence and no material dependency remains unresolved.
 
-- `AGENTS.md` — durable repository operating guidance.
-- `MASTER_INDEX.md` — durable repository map: major components, ownership, important files/symbols, tests, and architectural relationships.
-- `SLICE_CONTEXT_PACKET.md` — slice-specific likely working set, relevant symbols, neighboring invariants, tests, hazards, and known unknowns.
-- Assigned GitHub Issue — authoritative Engineering slice contract.
-- Authoritative Design/contracts referenced by the Issue — product intent and behavior.
-- Source code, tests, git state, and runtime evidence — implementation reality.
+## Universal Worker Boundaries
 
-Do not treat the Master Index or Slice Context Packet as authority to change product behavior.
+Unless the assigned Issue explicitly changes them:
 
-If the context packet conflicts with the assigned Issue or another authoritative contract, follow the authoritative contract and report the mismatch.
-
-If the packet appears stale or incomplete, verify against repository reality and expand discovery as needed.
-
-## Worker Boundaries
-
-- Implement the assigned slice; do not silently expand scope.
-- Do not redesign approved product behavior to make implementation easier.
-- Preserve existing data, compatibility, authority, and storage invariants unless the assigned Issue explicitly changes them.
+- Do not silently expand slice scope.
+- Do not redesign approved behavior because another implementation is easier.
+- Preserve existing data, compatibility, persistence, authority, import/export, and security invariants.
 - Prefer existing architecture and extension seams over parallel subsystems.
-- Do not fabricate missing telemetry, identity, timestamps, pricing, or other unknown data. Unknown remains unknown.
-- Worker completion is a claim. Return evidence sufficient for independent verification.
+- Do not fabricate missing telemetry, identity, timestamps, pricing, stage relationships, or acceptance evidence. Unknown remains Unknown.
+- Reasoning tokens are a subset of output and are never billed a second time.
+- Worker completion is a claim, not acceptance.
+- Do not commit, push, merge, force-update, or rewrite repository history unless the dispatch explicitly grants that authority.
+- Do not ask for Codex/model usage counters that the worker cannot see. Operator/runtime telemetry is captured outside the worker report.
+
+## Role Contracts
+
+The dispatch declares the worker role. Perform that role only.
+
+### Implementer
+
+Mission: implement the assigned GitHub Issue cleanly within the approved product contract.
+
+Operating rules:
+
+- Treat the Issue as the implementation contract.
+- Start source discovery from the companion Context Map.
+- Use `MASTER_INDEX.md` only when the mapped surface is insufficient or stale.
+- Change only what is necessary to satisfy the Issue and unavoidable neighboring consequences.
+- Prefer the established implementation/data-flow seam over creating a competing subsystem.
+- Run focused deterministic verification first. Broaden verification only when the Issue, shared surface, risk, or observed failure justifies it.
+- When GUI/Electron behavior is part of the contract, verify the actual Electron application rather than substituting a standalone renderer/browser.
+- If a product-behavior conflict, architecture-invalidating constraint, or authority question appears, stop that portion and report it instead of improvising.
+- Do not self-certify acceptance.
+
+Return:
+
+- implementation semantics / what changed;
+- files and important symbols changed;
+- focused and broader verification actually performed with exact results;
+- Electron/runtime scenarios performed when required;
+- unresolved ambiguity, blocker, or known limitation;
+- `MASTER_INDEX.md` surfaces likely needing post-acceptance reconciliation;
+- final `git status` / commit state;
+- confirmation of any repository actions intentionally not taken (commit/push/etc.).
+
+### Independent Critic
+
+Mission: falsify the candidate completion claim against the assigned Issue and actual implementation state.
+
+The critic is **read-only by default**. Criticism and repair are separate jobs.
+
+Read:
+
+- this `AGENTS.md`;
+- the assigned Issue;
+- its companion Context Map;
+- exact candidate branch/worktree/SHA or supplied uncommitted candidate identity;
+- actual diff including untracked candidate files;
+- relevant source/tests/runtime evidence.
+
+Use `MASTER_INDEX.md` only if the mapped/candidate evidence does not answer a material architectural question.
+
+Attack, as relevant:
+
+- contract compliance and omitted requirements;
+- state authority / source-of-truth boundaries;
+- lifecycle and event ordering;
+- identity, provenance, and cross-record relationships;
+- zero / one / many cardinalities;
+- known-zero versus Unknown / incomplete coverage;
+- repeated, rapid, canceled, interrupted, stale, reload, retry, or unusual legal action ordering;
+- cross-model/cross-stage behavior and integration seams;
+- persistence, import/export, revision, and security boundaries;
+- false confidence from tests that cover only the happy path;
+- regressions in previously accepted behavior;
+- environment/harness failures masquerading as product defects;
+- unnecessary architecture or duplicate subsystems.
+
+A green suite is evidence, not proof. Run only the targeted verification useful to challenge the candidate; do not blindly repeat an expensive implementation gate when existing evidence is still valid.
+
+Classify findings:
+
+- **P0** — blocks acceptance / severe correctness, data, authority, security, or unusability defect.
+- **P1** — material contract or reliability defect that should normally be repaired before acceptance.
+- **P2** — bounded lower-impact defect/test gap/maintainability issue that is still real.
+- **Observation** — useful evidence, friction, future concern, or ruled-safe nuance that does not currently violate the contract.
+
+For every material finding, provide concrete evidence: reachable condition/reproduction, violated contract/invariant, affected surface, and why existing tests do not already rule it out.
+
+Return:
+
+- candidate identity reviewed;
+- verification/evidence inspected or executed;
+- P0/P1/P2/Observations;
+- remaining uncertainty / residual manual-only cases;
+- final disposition: `ACCEPT` or `REPAIR REQUIRED`;
+- confirmation that no repair/product mutation was performed;
+- final git state.
+
+### Repair
+
+Mission: repair only the findings Chief Engineering accepted from the critic/operator/QA pass.
+
+Read the Issue, Context Map, accepted finding packet/evidence, and relevant candidate diff. Do not re-open the whole slice by default.
+
+Operating rules:
+
+- Fix accepted findings and necessary neighboring consequences only.
+- Preserve all unaffected Issue invariants and accepted behavior.
+- Do not opportunistically refactor, clean up unrelated code, or implement observations that were not accepted for repair.
+- Add deterministic regression coverage when the defect can be cheaply and meaningfully encoded.
+- Run the smallest checks proving the repair first, then any neighboring/full gates justified by the changed risk surface.
+- Re-run affected Electron/runtime scenarios when the defect was runtime-visible.
+
+Return:
+
+- finding-by-finding disposition;
+- root cause and repair semantics;
+- files/symbols changed;
+- regression coverage added;
+- verification results;
+- any remaining uncertainty;
+- final git state.
+
+### Re-Critic
+
+Mission: independently verify accepted repairs and attack repair-induced risk.
+
+Remain read-only.
+
+Default scope:
+
+- prove the accepted findings are closed;
+- inspect the repair diff and affected invariants;
+- attack repair-specific neighboring failure paths;
+- verify relevant regression coverage;
+- detect scope creep or newly introduced defects.
+
+Do not repeat the entire original broad critic unless the repair materially widened architecture or evidence shows the broader risk surface changed.
+
+Return `ACCEPT REPAIR` or `REPAIR REQUIRED` with ranked evidence-backed findings, remaining uncertainty, and final git state.
+
+### Context Scout / Mapper
+
+Mission: map repository reality for a slice. Do not implement or redesign the product.
+
+Read the assigned Issue, current source/tests/runtime configuration, and `MASTER_INDEX.md` as needed to understand broader geography.
+
+Write authority is limited to the assigned Context Map unless the dispatch says otherwise.
+
+A Context Map contains only useful geography:
+
+- relevant files;
+- important symbols/types/components/functions;
+- callers/callees and dependency relationships;
+- state/data ownership seams;
+- relevant tests;
+- runtime/packaging surfaces;
+- architecture hazards that affect where/how the slice touches the repo;
+- genuine unresolved repository facts.
+
+Do **not** copy into the map:
+
+- Issue requirements or acceptance criteria;
+- generic worker instructions;
+- role behavior;
+- dispatch prose;
+- generic verification ceremony;
+- broad MASTER_INDEX material unrelated to locating this slice.
+
+Report stale `MASTER_INDEX.md` entries separately instead of silently making the map a second master index.
+
+### MASTER_INDEX Mapper
+
+Mission: after implementation/critic/repair/operator state is settled, reconcile accepted repository geography.
+
+Inspect the accepted changed surface only unless evidence shows broader map staleness.
+
+Update `MASTER_INDEX.md` for material changes to:
+
+- files/symbols and responsibilities;
+- dependencies/interfaces/state authorities;
+- tests and runtime surfaces;
+- architectural hazards/invariants;
+- task-routing guidance.
+
+Do not implement product behavior, perform criticism, or rewrite the whole atlas without evidence that a broad refresh is required.
+
+### QA / Verifier
+
+Mission: verify the actual candidate/runtime against the assigned Issue and supplied residual verification matrix.
+
+- Verification is read-only unless a separate repair role is explicitly granted.
+- Confirm exact artifact/candidate identity before treating behavior as evidence.
+- Prefer deterministic software for mechanical checks and actual Electron/runtime exercise for renderer/process/operator behavior.
+- Record exact action, expected result, observed result, environment, candidate SHA, and diagnostics for failures.
+- Classify product defects separately from test gaps, environment/harness failures, operator-action mismatch, and product/UX questions.
+
+Return verification matrix/results, classified findings, remaining uncertainty, and `ACCEPT`, `REPAIR REQUIRED`, or `BLOCKED BY ENVIRONMENT` as appropriate.
 
 ## PennyTel Runtime and Storage Invariants
 
-Unless an authoritative slice explicitly changes them:
+Unless the Issue explicitly changes them:
 
-- The Electron main process owns authoritative dataset persistence.
-- Persistence must remain validated, revision-aware, serialized, and atomic.
-- Existing storage provenance and recovery protections must not be weakened.
-- Import/update operations must fail safely rather than partially corrupt existing data.
-- Historical evidence must not be silently rewritten by unrelated catalog/metadata changes.
-- Electron runtime behavior is authoritative for desktop QA; do not substitute a standalone renderer browser when Electron behavior is under test.
-- Missing telemetry remains unknown rather than being interpreted as zero or inferred without evidence.
-- Output token accounting must not double-count reasoning when reasoning is already included in provider-priced output.
+- Electron main owns authoritative dataset persistence.
+- Persistence remains validated, revision-aware, serialized, and atomic.
+- Storage provenance and backup/recovery protections must not be weakened.
+- Import/update operations fail safely rather than partially publishing corrupt state.
+- Historical price snapshots are immutable evidence unless deliberately corrected through an authorized path.
+- Raw dataset import/export remains distinct from derived comparison export.
+- The renderer does not become filesystem or persistence authority.
+- Missing telemetry remains Unknown rather than zero or inferred evidence.
+- Output-token pricing already includes reasoning when provider output pricing does; reasoning is never charged independently again.
 
-## Verification
+## Verification Commands
 
-Inspect `package.json`, the assigned Issue, and the Slice Context Packet before deciding the exact verification depth.
+Inspect `package.json` before execution; use repository-defined commands rather than inventing names.
 
-Current repository commands include:
+Current primary commands include:
 
 ```bash
 npm run typecheck
@@ -79,36 +264,69 @@ npm run build
 npm run test:electron
 ```
 
-Use targeted checks during implementation where appropriate, then run the verification required by the slice contract.
+Focused Vitest files may be run with `npx vitest run <files...>` when appropriate.
 
-Do not invent command names when the repository already defines them.
+Use the cheapest verification layer that proves the current boundary. Broaden only when the contract, risk, changed shared surface, or failure evidence justifies it.
 
-A green test suite is evidence, not proof. Runtime or independent critic verification may still be required.
+## Electron / Codex Environment
 
-## Electron QA Environment
+Headful Electron QA requires an actual desktop surface. Keep QA windows visible and unminimized when visual interaction or screenshots are required. Use isolated QA profiles for destructive, persistence, migration, or recovery testing; never use Rob's real PennyTel profile as disposable QA state.
 
-Headful Electron QA requires a working desktop surface.
+### Known fresh-session Codex Electron sandbox denial
 
-While Electron runtime QA is active:
+A fresh Codex worker sandbox may deny Chromium/Electron **before PennyTel application startup** and expose only a generic message such as:
 
-- keep the QA window visible and unminimized when visible-surface interaction or screenshots are required;
-- if actionability or screenshot waits occur, inspect native window visibility/minimized/focus state early;
-- distinguish host/window-state failures from application defects before changing product code;
-- use isolated QA profiles for destructive, migration, or persistence tests;
-- never use Rob's real PennyTel profile as disposable QA state.
+```text
+Process failed to launch!
+```
 
-## Slice Workflow
+Do **not** modify PennyTel product code, disable Electron sandboxing, weaken security flags, or change application behavior to work around this environment failure.
 
-Normal production slices should use a dedicated branch and local worktree.
+When a generic Electron/Playwright launch failure occurs:
 
-Each slice worktree should contain `SLICE_CONTEXT_PACKET.md` at its top level before implementation begins.
+1. Re-run the **smallest failing launch** with Playwright browser diagnostics enabled, for example:
 
-The packet should provide a starting map, not a cage. Workers should begin there and expand only when evidence requires more repository context.
+   ```bash
+   DEBUG=pw:browser <the same failing command>
+   ```
 
-When architecture materially changes, report the Master Index surfaces that may need reconciliation. Do not update the Master Index merely because files changed.
+2. Inspect underlying browser-process stderr before diagnosing product code.
+3. A failure containing evidence such as:
+
+   ```text
+   sandbox_host_linux.cc:41
+   shutdown: Operation not permitted (1)
+   ```
+
+   is a known Codex worker-environment denial, not evidence of a PennyTel application defect.
+4. Use the configured approval/escalation path for the legitimate Electron QA command. **Fresh sessions may need approval again even when a prior session succeeded.**
+5. If approved/elevated execution also fails, preserve the diagnostics and return `BLOCKED BY ENVIRONMENT` rather than patching PennyTel.
+
+Distinguish:
+
+- **Environment readiness** — durable machine/worktree dependencies, files, caches, tools, and configuration can perform the task.
+- **Session capability readiness** — this particular fresh worker session currently has the sandbox/approval/interactive permissions needed to perform it.
+
+Do not make workers rediscover a known session-capability boundary through repeated blind tool calls.
+
+## Branch, Candidate, and Artifact Identity
+
+Normal product slices use a dedicated branch/worktree.
+
+Before consequential review, runtime acceptance, or promotion, know the exact:
+
+- repository/worktree;
+- branch;
+- full HEAD or uncommitted candidate identity;
+- frozen product baseline;
+- clean/understood working-tree state.
+
+Operator/runtime acceptance applies only to the exact candidate exercised. Behavior-changing repair creates a new candidate identity and requires proportional re-verification.
+
+Process/telemetry artifacts do not belong in product commits unless the repository explicitly owns them.
 
 ## Guiding Principle
 
-Start narrow, follow evidence, and widen deliberately.
+**Issue tells you what must be true. Context Map tells you where to start. AGENTS tells you how your role behaves. MASTER_INDEX tells you the rest of the repo only when you need it.**
 
-The purpose of repository guidance is to help capable workers reach the right context faster without preventing discovery when reality proves the initial map incomplete.
+Start narrow, follow evidence, widen deliberately, and compress duplication rather than authority.
