@@ -272,40 +272,43 @@ Use the cheapest verification layer that proves the current boundary. Broaden on
 
 Headful Electron QA requires an actual desktop surface. Keep QA windows visible and unminimized when visual interaction or screenshots are required. Use isolated QA profiles for destructive, persistence, migration, or recovery testing; never use Rob's real PennyTel profile as disposable QA state.
 
-### Known fresh-session Codex Electron sandbox denial
+### Known fresh-session Codex Electron sandbox denial — required route
 
-A fresh Codex worker sandbox may deny Chromium/Electron **before PennyTel application startup** and expose only a generic message such as:
+Fresh Codex worker sessions are known to deny ordinary sandboxed Chromium/Electron launch **before PennyTel application startup**. When Electron QA is required, do not use the ordinary sandboxed launch path as the first attempt and do not spend a tool call rediscovering the known denial.
 
-```text
-Process failed to launch!
-```
+**Required execution route:**
 
-Do **not** modify PennyTel product code, disable Electron sandboxing, weaken security flags, or change application behavior to work around this environment failure.
-
-When a generic Electron/Playwright launch failure occurs:
-
-1. Re-run the **smallest failing launch** with Playwright browser diagnostics enabled, for example:
+1. Run the legitimate repository-defined Electron QA command through the configured approval/elevation path **first**.
+2. If approval/elevation is unavailable or denied, do not fall back to repeated ordinary sandboxed launches. Preserve the session-capability limitation and return `BLOCKED BY ENVIRONMENT` for the Electron-required portion.
+3. If an elevated/approved launch itself fails, diagnose the smallest failing command before attributing the failure to PennyTel. Use Playwright browser diagnostics when useful, for example:
 
    ```bash
    DEBUG=pw:browser <the same failing command>
    ```
 
-2. Inspect underlying browser-process stderr before diagnosing product code.
-3. A failure containing evidence such as:
+4. If a non-elevated launch is attempted accidentally and exposes only a generic message such as:
+
+   ```text
+   Process failed to launch!
+   ```
+
+   inspect underlying browser-process stderr. Evidence such as:
 
    ```text
    sandbox_host_linux.cc:41
    shutdown: Operation not permitted (1)
    ```
 
-   is a known Codex worker-environment denial, not evidence of a PennyTel application defect.
-4. Use the configured approval/escalation path for the legitimate Electron QA command. **Fresh sessions may need approval again even when a prior session succeeded.**
-5. If approved/elevated execution also fails, preserve the diagnostics and return `BLOCKED BY ENVIRONMENT` rather than patching PennyTel.
+   is the known Codex worker-environment denial, not evidence of a PennyTel application defect.
+5. Do **not** modify PennyTel product code, disable Electron/Chromium sandboxing, weaken security flags, or change application behavior to work around this environment restriction.
+6. Fresh sessions may require approval again even when a previous session succeeded. If approved/elevated execution cannot be obtained or cannot run, return `BLOCKED BY ENVIRONMENT` with the relevant diagnostics rather than patching the product.
 
 Distinguish:
 
 - **Environment readiness** — durable machine/worktree dependencies, files, caches, tools, and configuration can perform the task.
 - **Session capability readiness** — this particular fresh worker session currently has the sandbox/approval/interactive permissions needed to perform it.
+
+Known failure modes with an established safe route should be expressed as directives, not merely warnings: tell the worker which route to use, what fallback is permitted, and what workaround is prohibited.
 
 Do not make workers rediscover a known session-capability boundary through repeated blind tool calls.
 
