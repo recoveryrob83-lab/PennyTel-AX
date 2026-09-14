@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { captureElectron } from './electron-qa-capture.mjs'
+import { verifyAnalytics } from './electron-analytics-qa.mjs'
 
 await mkdir(resolve('test-results'), { recursive: true })
 const directory = await mkdtemp(resolve('test-results/accepted-outcome-runtime-'))
@@ -76,6 +77,7 @@ try {
   )
   await table.scrollIntoViewIfNeeded()
   await captureElectron(app, page, { path: join(directory, 'accepted-outcomes.png') })
+  await verifyAnalytics(app, page, directory)
   await page.getByText('Narrow the cohort', { exact: true }).click()
   const filter = page.getByLabel('Filter Model Configuration', { exact: true })
   await filter.selectOption({ label: 'GPT-6 Astra — Low' })
@@ -128,7 +130,7 @@ try {
   await page.getByRole('button', { name: 'Export comparison', exact: true }).click()
   await page.getByRole('status').filter({ hasText: exportPath }).waitFor()
   const analysis = JSON.parse(await readFile(exportPath, 'utf8'))
-  assert.equal(analysis.app.version, '0.1.3')
+  assert.equal(analysis.app.version, '0.1.4')
   assert.deepEqual(analysis.context.filters, { modelConfiguration: astraKey })
   assert.deepEqual(analysis.context.selectedCandidates, [astraKey])
   assert.deepEqual(analysis.context.stageScopes, [{ kind: 'role', value: 'Implementer' }])

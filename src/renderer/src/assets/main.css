@@ -1000,6 +1000,104 @@ label.field {
   gap: 9px;
   margin-bottom: 28px;
 }
+
+.analytics-workspace {
+  min-width: 0;
+}
+.analytics-workspace th small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-weight: normal;
+}
+.analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.analytics-chart {
+  min-width: 0;
+  margin: 18px 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.analytics-chart h3 {
+  margin-top: 0;
+}
+.analytics-row {
+  display: grid;
+  gap: 6px;
+  margin: 18px 0;
+  overflow-wrap: anywhere;
+}
+.analytics-row small {
+  color: var(--muted);
+}
+.analytics-row .record-link {
+  text-align: left;
+}
+.analytics-track {
+  display: flex;
+  height: 12px;
+  width: 100%;
+  background: #e9edf0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.analytics-track i {
+  display: block;
+  height: 100%;
+}
+.fresh-input {
+  background: #3565a8;
+}
+.cached-input {
+  background: #258479;
+}
+.output-cost {
+  background: #a15d9d;
+}
+.unknown-evidence {
+  background: repeating-linear-gradient(45deg, #8a939e, #8a939e 4px, #c6ccd3 4px, #c6ccd3 8px);
+}
+.analytics-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.analytics-chart svg text {
+  fill: currentColor;
+  font-size: 12px;
+}
+.analytics-axis {
+  fill: none;
+  stroke: #8a939e;
+}
+.analytics-chart svg circle {
+  fill: #3565a8;
+  fill-opacity: 0.7;
+  stroke: white;
+  stroke-width: 1.5;
+  cursor: pointer;
+}
+.analytics-chart svg circle:hover,
+.analytics-chart svg circle:focus {
+  fill: #a15d9d;
+  fill-opacity: 1;
+  stroke: #222;
+  stroke-width: 2.5;
+  outline: none;
+}
+.analytics-chart details .record-link {
+  margin-right: 10px;
+}
+@media (max-width: 1100px) {
+  .analytics-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .bar-row {
   display: flex;
   align-items: center;

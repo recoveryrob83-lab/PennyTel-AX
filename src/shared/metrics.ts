@@ -6,15 +6,14 @@ import {
   type DerivedRunDimension
 } from './configuration'
 
+const usdFormatter = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4
+})
 export const money = (value: number | null): string =>
-  value === null
-    ? 'Unknown'
-    : new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: 'USD',
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 4
-      }).format(value)
+  value === null ? 'Unknown' : usdFormatter.format(value)
 export const duration = (minutes: number | null): string =>
   minutes === null
     ? 'Unknown'
@@ -256,8 +255,36 @@ export type GroupBy =
   | 'contextMode'
   | 'localHour'
   | 'dayOfWeek'
+  | keyof typeof recordedRunLabels
+  | keyof typeof recordedSliceLabels
+export const recordedRunLabels = {
+  provider: 'Recorded provider',
+  providerId: 'Recorded provider ID',
+  offerId: 'Saved offer ID',
+  runType: 'Recorded stage',
+  runtimeTested: 'Runtime tested',
+  result: 'Run result'
+} as const
+export const recordedSliceLabels = {
+  project: 'Project',
+  ambiguity: 'Ambiguity',
+  risk: 'Risk',
+  disposition: 'Slice disposition',
+  qualityGrade: 'Product quality grade'
+} as const
+// A recorded group key wraps one maximum-size source string, including JSON escaping.
+export const MAX_RECORDED_GROUP_KEY_LENGTH = 100_000 * 6 + 32
+export function recordedRunValue(
+  run: Run,
+  key: keyof typeof recordedRunLabels
+): string | undefined {
+  const value = key === 'offerId' ? run.priceSnapshot?.offerId : run[key]
+  return value === undefined || value === '' ? undefined : String(value)
+}
 export const groupLabels: Record<GroupBy, string> = {
   ...derivedRunLabels,
+  ...recordedRunLabels,
+  ...recordedSliceLabels,
   model: 'Exact model',
   thinking: 'Thinking level',
   role: 'Factory role',
@@ -288,6 +315,18 @@ export function groupRuns(
       continue
     }
     const slice = data.slices.find((s) => s.id === run.sliceId)!
+    if (groupBy in recordedRunLabels || groupBy in recordedSliceLabels) {
+      const value =
+        groupBy in recordedRunLabels
+          ? recordedRunValue(run, groupBy as keyof typeof recordedRunLabels)
+          : slice[groupBy as keyof typeof recordedSliceLabels]
+      // Explicit null identity keeps missing evidence separate from literal text "Unknown".
+      const key = JSON.stringify(['recorded', value ?? null])
+      const label = value === undefined ? 'Unknown (not recorded)' : String(value)
+      if (!groups.has(key)) groups.set(key, { key, label, runs: [] })
+      groups.get(key)!.runs.push(run)
+      continue
+    }
     const value =
       groupBy === 'slice'
         ? slice.id
@@ -297,7 +336,16 @@ export function groupRuns(
             ? run.candidate
               ? `${slice.id} / ${run.candidate}`
               : undefined
-            : run[groupBy as Exclude<GroupBy, DerivedRunDimension | 'slice' | 'productionModel'>]
+            : run[
+                groupBy as Exclude<
+                  GroupBy,
+                  | DerivedRunDimension
+                  | 'slice'
+                  | 'productionModel'
+                  | keyof typeof recordedRunLabels
+                  | keyof typeof recordedSliceLabels
+                >
+              ]
     const key = String(value ?? 'Unknown')
     const label = groupBy === 'slice' ? slice.title : key
     if (!groups.has(key)) groups.set(key, { key, label, runs: [] })

@@ -1,7 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { Dataset, Run } from '../../../shared/types'
 import {
-  compareData,
   MAX_COMPARISON_CANDIDATES,
   MAX_COMPARISON_STAGE_SCOPES,
   runFilterLabels,
@@ -14,7 +13,11 @@ import {
   type ComparisonFilters,
   type ComparisonSort,
   type FilterKey,
-  type StageScope
+  type ComparisonContext,
+  type OutcomeFilters,
+  type StageScope,
+  applyComparisonSelection,
+  compareDataBase
 } from '../../../shared/comparison'
 import { burnLabel, displayTimestamp, qualityLabel } from '../../../shared/presentation'
 import {
@@ -30,12 +33,15 @@ import {
 import { Empty, Metric } from '../components/ui'
 import { RunTable } from '../components/RunTable'
 import type { ComparisonIdentity } from '../../../shared/configuration'
+import { AnalyticsWorkspace } from '../components/AnalyticsWorkspace'
 
 interface Props {
   data: Dataset
   onOpenRun: (run: Run) => void
   onOpenSlice: (id: string) => void
 }
+const sliceFilterKeys = Object.keys(sliceFilterLabels) as (keyof typeof sliceFilterLabels)[]
+const runFilterKeys = Object.keys(runFilterLabels) as (keyof typeof runFilterLabels)[]
 export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Element {
   const [groupBy, setGroupBy] = useState<GroupBy>('modelConfiguration')
   const [filters, setFilters] = useState<ComparisonFilters>({})
@@ -43,17 +49,49 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
   const [sort, setSort] = useState<ComparisonSort>('label')
   const [selectedCandidates, setSelectedCandidates] = useState<string[]>([])
   const [stageScopes, setStageScopes] = useState<StageScope[]>([])
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [includeUnknownDates, setIncludeUnknownDates] = useState(false)
+  const [outcomeFilters, setOutcomeFilters] = useState<OutcomeFilters>({})
   const [exportBusy, setExportBusy] = useState(false)
   const [exportError, setExportError] = useState('')
   const [exportMessage, setExportMessage] = useState('')
-  const context = {
-    filters,
-    groupBy,
-    sort,
-    ...(selected ? { selectedGroup: selected } : {}),
-    ...(selectedCandidates.length ? { selectedCandidates } : {}),
-    ...(stageScopes.length ? { stageScopes } : {})
-  }
+  const dateError = !!(dateFrom && dateTo && dateFrom > dateTo)
+  const baseContext: ComparisonContext = useMemo(
+    () => ({
+      filters,
+      groupBy,
+      sort,
+      ...(stageScopes.length ? { stageScopes } : {}),
+      ...(dateFrom || dateTo
+        ? {
+            dateRange: {
+              ...(dateFrom ? { from: `${dateFrom}T00:00:00.000Z` } : {}),
+              ...(dateTo ? { to: `${dateTo}T23:59:59.999Z` } : {}),
+              includeUnknown: includeUnknownDates
+            }
+          }
+        : {}),
+      ...(Object.keys(outcomeFilters).length ? { outcomeFilters } : {})
+    }),
+    [filters, groupBy, sort, stageScopes, dateFrom, dateTo, includeUnknownDates, outcomeFilters]
+  )
+  const context: ComparisonContext = useMemo(
+    () => ({
+      ...baseContext,
+      ...(selected ? { selectedGroup: selected } : {}),
+      ...(selectedCandidates.length ? { selectedCandidates } : {})
+    }),
+    [baseContext, selected, selectedCandidates]
+  )
+  const baseView = useMemo(() => compareDataBase(data, baseContext), [data, baseContext])
+  const view = useMemo(
+    () => applyComparisonSelection(data, baseView, context),
+    [data, baseView, context]
+  )
+  // Candidate/evidence-group selection and export status do not change analytics values.
+  // Keep the large analytics subtree out of those unrelated Compare rerenders.
+  const analyticsVersion = useMemo(() => ({ data, baseContext }), [data, baseContext])
   const {
     slices,
     runs,
@@ -64,7 +102,7 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
     shownRuns,
     discoveries,
     accepted
-  } = compareData(data, context)
+  } = view
   const exportComparison = async (): Promise<void> => {
     setExportBusy(true)
     setExportError('')
@@ -81,37 +119,44 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
       setExportBusy(false)
     }
   }
-  const sliceKeys = Object.keys(sliceFilterLabels) as (keyof typeof sliceFilterLabels)[]
-  const runKeys = Object.keys(runFilterLabels) as (keyof typeof runFilterLabels)[]
   const knownMax = Math.max(...groups.map((g) => g.stats.cost), 0)
-  const candidateOptions = runFilterOptions(data, 'modelConfiguration')
-  for (const candidate of candidates)
-    if (!candidateOptions.some((option) => option.key === candidate.key))
-      candidateOptions.push({ key: candidate.key, label: candidate.label })
-  const stageOptions = stageScopeOptions(data)
-  for (const scope of stageScopes)
-    if (!stageOptions.some((option) => stageScopeKey(option) === stageScopeKey(scope)))
-      stageOptions.push(scope)
-  const filterOptions: [FilterKey, string, ComparisonIdentity[]][] = [
-    ...sliceKeys.map(
-      (k) =>
-        [
-          k,
-          sliceFilterLabels[k],
-          [...new Set(data.slices.map((s) => String(s[k] ?? '')).filter(Boolean))]
-            .sort()
-            .map((value) => ({ key: value, label: value }))
-        ] as [FilterKey, string, ComparisonIdentity[]]
-    ),
-    ...runKeys.map(
-      (k) =>
-        [k, runFilterLabels[k], runFilterOptions(data, k)] as [
-          FilterKey,
-          string,
-          ComparisonIdentity[]
-        ]
-    )
-  ]
+  const candidateOptions = useMemo(() => {
+    const options = runFilterOptions(data, 'modelConfiguration')
+    for (const candidate of candidates)
+      if (!options.some((option) => option.key === candidate.key))
+        options.push({ key: candidate.key, label: candidate.label })
+    return options
+  }, [data, candidates])
+  const stageOptions = useMemo(() => {
+    const options = stageScopeOptions(data)
+    for (const scope of stageScopes)
+      if (!options.some((option) => stageScopeKey(option) === stageScopeKey(scope)))
+        options.push(scope)
+    return options
+  }, [data, stageScopes])
+  const filterOptions: [FilterKey, string, ComparisonIdentity[]][] = useMemo(
+    () => [
+      ...sliceFilterKeys.map(
+        (k) =>
+          [
+            k,
+            sliceFilterLabels[k],
+            [...new Set(data.slices.map((s) => String(s[k] ?? '')).filter(Boolean))]
+              .sort()
+              .map((value) => ({ key: value, label: value }))
+          ] as [FilterKey, string, ComparisonIdentity[]]
+      ),
+      ...runFilterKeys.map(
+        (k) =>
+          [k, runFilterLabels[k], runFilterOptions(data, k)] as [
+            FilterKey,
+            string,
+            ComparisonIdentity[]
+          ]
+      )
+    ],
+    [data]
+  )
   return (
     <>
       <div className="page-heading">
@@ -124,7 +169,7 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
           <span className="count-tag">
             {runs.length} runs · {slices.length} slices
           </span>
-          <button className="primary" disabled={exportBusy} onClick={exportComparison}>
+          <button className="primary" disabled={exportBusy || dateError} onClick={exportComparison}>
             {exportBusy ? 'Exporting…' : 'Export comparison'}
           </button>
         </div>
@@ -174,39 +219,145 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
             className="text-button"
             onClick={() => {
               setFilters({})
+              setDateFrom('')
+              setDateTo('')
+              setIncludeUnknownDates(false)
+              setOutcomeFilters({})
               setSelected(undefined)
             }}
           >
             Clear filters
           </button>
           <span className="muted">
-            {Object.values(filters).filter(Boolean).length} active filters
+            {Object.values(filters).filter((value) => value !== '' && value !== undefined).length +
+              Object.keys(outcomeFilters).length +
+              (dateFrom || dateTo ? 1 : 0)}{' '}
+            active filters
           </span>
         </div>
         <details>
           <summary>Narrow the cohort</summary>
           <div className="filter-grid">
-            {filterOptions.map(([key, label, options]) => (
-              <label key={key}>
-                {label}
-                <select
-                  aria-label={`Filter ${label}`}
-                  value={filters[key] ?? ''}
-                  onChange={(e) => {
-                    setFilters({ ...filters, [key]: e.target.value })
-                    setSelected(undefined)
-                  }}
-                >
-                  <option value="">All</option>
-                  {options.map((o) => (
-                    <option key={o.key} value={o.key}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ))}
+            {filterOptions.map(([key, label, options]) => {
+              let missingKey = '__missing__'
+              while (options.some((option) => option.key === missingKey)) missingKey += '_'
+              return (
+                <label key={key}>
+                  {label}
+                  <select
+                    aria-label={`Filter ${label}`}
+                    value={filters[key] === null ? missingKey : (filters[key] ?? '')}
+                    onChange={(e) => {
+                      setFilters({
+                        ...filters,
+                        [key]: e.target.value === missingKey ? null : e.target.value
+                      })
+                      setSelected(undefined)
+                    }}
+                  >
+                    <option value="">All</option>
+                    <option value={missingKey}>Unknown (not recorded)</option>
+                    {options.map((o) => (
+                      <option key={o.key} value={o.key}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )
+            })}
           </div>
+          <div className="filter-grid">
+            <label>
+              Run start from (UTC day)
+              <input
+                aria-label="Run start from (UTC day)"
+                type="date"
+                value={dateFrom}
+                onChange={(e) => {
+                  setDateFrom(e.target.value)
+                  setSelected(undefined)
+                }}
+              />
+            </label>
+            <label>
+              Run start through (UTC day)
+              <input
+                aria-label="Run start through (UTC day)"
+                type="date"
+                value={dateTo}
+                onChange={(e) => {
+                  setDateTo(e.target.value)
+                  setSelected(undefined)
+                }}
+              />
+            </label>
+            <label className="inline-check">
+              <input
+                type="checkbox"
+                checked={includeUnknownDates}
+                onChange={(e) => {
+                  setIncludeUnknownDates(e.target.checked)
+                  setSelected(undefined)
+                }}
+              />
+              Include unknown run starts in date range
+            </label>
+          </div>
+          {dateError && (
+            <p role="alert" className="error">
+              The start date must be on or before the end date. Correct the range before exporting.
+            </p>
+          )}
+          <p className="muted">
+            Date bounds include both UTC days and qualify matching runs; accepted lifecycle costs
+            still include all relevant stages. Undated runs are excluded from a date range unless
+            included explicitly.
+          </p>
+          <fieldset>
+            <legend>Accepted outcome filters</legend>
+            <p className="muted">
+              Using any of these filters limits the entire cohort to accepted slices with matching
+              full-lifecycle evidence. Repair burden means recorded repair cost, with incomplete
+              evidence kept Unknown.
+            </p>
+            <div className="filter-grid">
+              {(
+                [
+                  ['firstPass', 'First-pass acceptance', ['Yes', 'No', 'Unknown']],
+                  ['repairPresence', 'Repair presence', ['Yes', 'No', 'Unknown']],
+                  ['repairBurden', 'Repair cost burden', ['Zero', 'Positive', 'Unknown']]
+                ] as const
+              ).map(([key, label, options]) => (
+                <label key={key}>
+                  {label}
+                  <select
+                    aria-label={`Filter ${label}`}
+                    value={outcomeFilters[key] ?? ''}
+                    onChange={(e) => {
+                      const next = { ...outcomeFilters }
+                      if (e.target.value) Object.assign(next, { [key]: e.target.value })
+                      else delete next[key]
+                      setOutcomeFilters(next)
+                      setSelected(undefined)
+                    }}
+                  >
+                    <option value="">All</option>
+                    {options.map((value) => (
+                      <option key={value}>{value}</option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <p className="footnote">
+            Not recorded in the current telemetry schema: technical stack tags, difficulty/coupling
+            scores, evidence class, and explicit context-preparation state. These remain Unknown and
+            have no inferred filters. Context mode, run result, runtime tested, ambiguity, and risk
+            retain their own recorded meanings. Project is the recorded product/project field;
+            runtime tested is not a QA pass verdict.
+          </p>
         </details>
       </section>
       <section className="panel comparison-workspace" aria-label="Comparison workspace">
@@ -409,6 +560,13 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
           detail="Attributed to linked runs in this cohort"
         />
       </div>
+      <AnalyticsWorkspace
+        view={view}
+        analyticsVersion={analyticsVersion}
+        onSelectGroup={setSelected}
+        onOpenRun={onOpenRun}
+        onOpenSlice={onOpenSlice}
+      />
       <section className="panel">
         <div className="section-heading">
           <div>

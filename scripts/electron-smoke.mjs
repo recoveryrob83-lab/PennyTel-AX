@@ -291,7 +291,7 @@ try {
   await field('Filter Exact model').selectOption('QA Model')
   await field('Order groups').selectOption('cost')
   await page.getByRole('heading', { name: 'Accepted slice economics' }).waitFor()
-  await page
+  await acceptedSection
     .getByRole('cell')
     .filter({ hasText: /^\$3\.258/ })
     .waitFor()

@@ -1,5 +1,12 @@
 import type { Dataset, Discovery, Finding, Role, Run, Slice } from './types'
 import {
+  distribution,
+  reasoningShare,
+  runAnalytics,
+  temporalAnalytics,
+  type RunAnalytics
+} from './analytics'
+import {
   derivedRunIdentity,
   derivedRunLabels,
   derivedPresentationLabels,
@@ -13,6 +20,10 @@ import {
   groupRuns,
   measured,
   recordedCounts,
+  recordedRunLabels,
+  recordedSliceLabels,
+  MAX_RECORDED_GROUP_KEY_LENGTH,
+  recordedRunValue,
   roleSummary,
   runEvidence,
   summarize,
@@ -112,10 +123,6 @@ function acceptedOutcomeEvidence(
     repairMetrics.costUSD.completeTotal !== null
       ? repairMetrics.costUSD.completeTotal / implementationCost
       : null
-  const pairs = lifecycle.filter(
-    (run) => run.reasoningTokens !== undefined && run.outputTokens !== undefined
-  )
-  const output = pairs.reduce((sum, run) => sum + run.outputTokens!, 0)
   const stages = new Map<string, { role: Role; runType: string; runs: Run[] }>()
   for (const run of lifecycle) {
     const key = JSON.stringify([run.role, run.runType])
@@ -154,12 +161,7 @@ function acceptedOutcomeEvidence(
       costUSD: repairMetrics.costUSD,
       toImplementationCostRatio: repairRatio
     },
-    reasoningShare: {
-      ratio: output > 0 ? pairs.reduce((sum, run) => sum + run.reasoningTokens!, 0) / output : null,
-      knownRuns: pairs.length,
-      totalRuns: lifecycle.length,
-      complete: lifecycle.length > 0 && pairs.length === lifecycle.length
-    }
+    reasoningShare: reasoningShare(lifecycle)
   }
 }
 
@@ -209,6 +211,7 @@ export const sliceFilterLabels = {
 } as const
 export const runFilterLabels = {
   ...derivedRunLabels,
+  ...recordedRunLabels,
   model: 'Exact model',
   thinking: 'Thinking level',
   role: 'Factory role',
@@ -216,7 +219,21 @@ export const runFilterLabels = {
   contextMode: 'Context mode'
 } as const
 export type FilterKey = keyof typeof sliceFilterLabels | keyof typeof runFilterLabels
-export type ComparisonFilters = Partial<Record<FilterKey, string>>
+// null explicitly selects missing evidence; empty string retains the legacy cleared-filter meaning.
+export type ComparisonFilters = Partial<Record<FilterKey, string | null>>
+export interface ComparisonDateRange {
+  from?: string
+  to?: string
+  includeUnknown: boolean
+}
+export const outcomeFilterOptions = {
+  firstPass: ['Yes', 'No', 'Unknown'],
+  repairPresence: ['Yes', 'No', 'Unknown'],
+  repairBurden: ['Zero', 'Positive', 'Unknown']
+} as const
+export type OutcomeFilters = {
+  [K in keyof typeof outcomeFilterOptions]?: (typeof outcomeFilterOptions)[K][number]
+}
 export type ComparisonSort = 'label' | 'cost' | 'time'
 export interface ComparisonContext {
   filters: ComparisonFilters
@@ -225,6 +242,8 @@ export interface ComparisonContext {
   selectedGroup?: string
   selectedCandidates?: string[]
   stageScopes?: StageScope[]
+  dateRange?: ComparisonDateRange
+  outcomeFilters?: OutcomeFilters
 }
 export interface ComparisonRequest {
   revision: number
@@ -238,8 +257,48 @@ export function runFilterIdentity(
   key: keyof typeof runFilterLabels
 ): ComparisonIdentity {
   if (key in derivedRunLabels) return derivedRunIdentity(data, run, key as DerivedRunDimension)
-  const value = run[key as Exclude<keyof typeof runFilterLabels, DerivedRunDimension>] ?? ''
-  return { key: value, label: value }
+  const value =
+    key in recordedRunLabels
+      ? (recordedRunValue(run, key as keyof typeof recordedRunLabels) ?? '')
+      : (run[
+          key as Exclude<
+            keyof typeof runFilterLabels,
+            DerivedRunDimension | keyof typeof recordedRunLabels
+          >
+        ] ?? '')
+  return {
+    key: value,
+    label:
+      key === 'runtimeTested'
+        ? value === 'true'
+          ? 'Yes'
+          : value === 'false'
+            ? 'No'
+            : 'Unknown'
+        : value
+  }
+}
+
+function activeFilter(value: string | null | undefined): boolean {
+  return value !== undefined && value !== ''
+}
+function matchesFilter(value: string | undefined, filter: string | null | undefined): boolean {
+  return (
+    !activeFilter(filter) ||
+    (filter === null ? value === undefined || value === '' : value === filter)
+  )
+}
+export function missingRunFilter(
+  data: Dataset,
+  run: Run,
+  key: keyof typeof runFilterLabels
+): boolean {
+  if (key === 'modelFamily') return !run.modelFamily
+  if (key === 'modelConfiguration' || key === 'canonicalModel') {
+    // Unresolved recorded identities remain selectable evidence, not fabricated missing models.
+    return !run.model && !run.modelId
+  }
+  return runFilterIdentity(data, run, key).key === ''
 }
 
 export function runFilterOptions(
@@ -326,7 +385,9 @@ export function validateComparisonRequest(value: unknown): asserts value is Comp
           'sort',
           'selectedGroup',
           'selectedCandidates',
-          'stageScopes'
+          'stageScopes',
+          'dateRange',
+          'outcomeFilters'
         ].includes(k)
     ) ||
     typeof context.groupBy !== 'string' ||
@@ -335,6 +396,34 @@ export function validateComparisonRequest(value: unknown): asserts value is Comp
     !isObject(context.filters)
   )
     throw new Error('Invalid comparison context.')
+  if (context.dateRange !== undefined) {
+    const range = context.dateRange
+    const validDate = (v: unknown): boolean =>
+      typeof v === 'string' &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(v) &&
+      Number.isFinite(Date.parse(v)) &&
+      new Date(v).toISOString() === v
+    if (
+      !isObject(range) ||
+      Object.keys(range).some((k) => !['from', 'to', 'includeUnknown'].includes(k)) ||
+      typeof range.includeUnknown !== 'boolean' ||
+      (range.from === undefined && range.to === undefined) ||
+      (range.from !== undefined && !validDate(range.from)) ||
+      (range.to !== undefined && !validDate(range.to)) ||
+      (typeof range.from === 'string' && typeof range.to === 'string' && range.from > range.to)
+    )
+      throw new Error('Invalid comparison date range.')
+  }
+  if (
+    context.outcomeFilters !== undefined &&
+    (!isObject(context.outcomeFilters) ||
+      Object.entries(context.outcomeFilters).some(
+        ([key, value]) =>
+          !Object.hasOwn(outcomeFilterOptions, key) ||
+          !(outcomeFilterOptions[key as keyof OutcomeFilters] as readonly unknown[]).includes(value)
+      ))
+  )
+    throw new Error('Invalid accepted outcome filters.')
   if (
     context.selectedCandidates !== undefined &&
     (!Array.isArray(context.selectedCandidates) ||
@@ -367,39 +456,59 @@ export function validateComparisonRequest(value: unknown): asserts value is Comp
     context.selectedGroup !== undefined &&
     (typeof context.selectedGroup !== 'string' ||
       context.selectedGroup.length >
-        (context.groupBy in derivedRunLabels ? MAX_DERIVED_IDENTITY_LENGTH : 100_000))
+        (context.groupBy in derivedRunLabels
+          ? MAX_DERIVED_IDENTITY_LENGTH
+          : context.groupBy in recordedRunLabels || context.groupBy in recordedSliceLabels
+            ? MAX_RECORDED_GROUP_KEY_LENGTH
+            : 100_000))
   )
     throw new Error('Invalid comparison group selection.')
   for (const [key, v] of Object.entries(context.filters))
     if (
       ![...sliceKeys, ...runKeys].includes(key as FilterKey) ||
-      typeof v !== 'string' ||
-      v.length > (key in derivedRunLabels ? MAX_DERIVED_IDENTITY_LENGTH : 100_000)
+      (v !== null &&
+        (typeof v !== 'string' ||
+          v.length > (key in derivedRunLabels ? MAX_DERIVED_IDENTITY_LENGTH : 100_000)))
     )
       throw new Error(`Invalid comparison filter: ${key}.`)
 }
 export function selectCohort(
   data: Dataset,
   filters: ComparisonFilters,
-  stageScopes: StageScope[] = []
+  stageScopes: StageScope[] = [],
+  dateRange?: ComparisonDateRange,
+  outcomeFilters: OutcomeFilters = {}
 ): { eligibleSlices: Slice[]; slices: Slice[]; runs: Run[] } {
-  const eligibleSlices = data.slices.filter((slice) =>
-    sliceKeys.every((key) => !filters[key] || String(slice[key] ?? '') === filters[key])
+  const eligibleSlices = data.slices.filter(
+    (slice) =>
+      sliceKeys.every((key) =>
+        matchesFilter(slice[key] === undefined ? undefined : String(slice[key]), filters[key])
+      ) &&
+      (!Object.keys(outcomeFilters).length ||
+        (slice.disposition === 'Accepted' &&
+          matchesOutcome(acceptedEconomics(data, slice), outcomeFilters)))
   )
   const eligibleIds = new Set(eligibleSlices.map((slice) => slice.id))
   const runs = data.runs.filter(
     (run) =>
       eligibleIds.has(run.sliceId) &&
-      runKeys.every(
-        (key) => !filters[key] || runFilterIdentity(data, run, key).key === filters[key]
+      runKeys.every((key) =>
+        filters[key] === null
+          ? missingRunFilter(data, run, key)
+          : matchesFilter(runFilterIdentity(data, run, key).key, filters[key])
       ) &&
+      (!dateRange ||
+        (!run.startAt
+          ? dateRange.includeUnknown
+          : (!dateRange.from || Date.parse(run.startAt) >= Date.parse(dateRange.from)) &&
+            (!dateRange.to || Date.parse(run.startAt) <= Date.parse(dateRange.to)))) &&
       (!stageScopes.length || stageScopes.some((scope) => run[scope.kind] === scope.value))
   )
   const matchingSliceIds = new Set(runs.map((run) => run.sliceId))
   // All active run conditions must be satisfied by the same run. With no run filters or stages,
   // empty slices remain visible; their costs are unknown rather than silently dropped.
   const slices =
-    stageScopes.length || runKeys.some((key) => !!filters[key])
+    stageScopes.length || dateRange || runKeys.some((key) => activeFilter(filters[key]))
       ? eligibleSlices.filter((slice) => matchingSliceIds.has(slice.id))
       : eligibleSlices
   return { eligibleSlices, slices, runs }
@@ -493,6 +602,117 @@ export function acceptedEconomics(
     discoveries: data.discoveries.filter((d) => d.sliceId === slice.id && validatedDiscovery(d))
   }
 }
+type AcceptedEconomics = ReturnType<typeof acceptedEconomics>
+function completeRepairCost(a: AcceptedEconomics): number | null {
+  const repair = a.outcome.repair
+  const missingLink = a.findings.some(
+    (finding) =>
+      repair.findingIds.includes(finding.id) &&
+      (!finding.repairRunId || !repair.runIds.includes(finding.repairRunId))
+  )
+  if (missingLink || (repair.requiredRunIds.length > 0 && !repair.runIds.length)) return null
+  return repair.costUSD.completeTotal
+}
+function matchesOutcome(a: AcceptedEconomics, filters: OutcomeFilters): boolean {
+  const firstPass = a.outcome.firstPassAcceptance.state
+  const presence = firstPass === 'No' ? 'Yes' : firstPass === 'Yes' ? 'No' : 'Unknown'
+  const cost = completeRepairCost(a)
+  const burden = cost === null ? 'Unknown' : cost === 0 ? 'Zero' : 'Positive'
+  return (
+    (!filters.firstPass || filters.firstPass === firstPass) &&
+    (!filters.repairPresence || filters.repairPresence === presence) &&
+    (!filters.repairBurden || filters.repairBurden === burden)
+  )
+}
+export interface AcceptedAnalytics {
+  sampleCount: number
+  sliceIds: string[]
+  lifecycleRunIds: string[]
+  knownLifecycleCostUSD: MeasuredTotal
+  costUSD: ReturnType<typeof distribution>
+  wallMinutes: ReturnType<typeof distribution>
+  firstPass: { yes: number; no: number; unknown: number; determinable: number; rate: number | null }
+  repair: {
+    recordedRunCount: number
+    costUSD: ReturnType<typeof distribution>
+    toImplementationCostRatio: ReturnType<typeof distribution>
+  }
+  quality: ReturnType<typeof qualitySummary>
+  stages: (Omit<RunAnalytics, 'costUSD' | 'wallMinutes'> & {
+    key: string
+    role: Role
+    runType: string
+    costUSD: MeasuredTotal
+    wallMinutes: MeasuredTotal
+  })[]
+  outcomes: {
+    sliceId: string
+    title: string
+    lifecycleRunIds: string[]
+    acceptedAt: string | null
+    implementationCostUSD: MeasuredTotal
+    acceptedCostUSD: MeasuredTotal
+    wallMinutes: MeasuredTotal
+    qualityGrade: NonNullable<Slice['qualityGrade']> | null
+    firstPass: 'Yes' | 'No' | 'Unknown'
+    repairCostUSD: number | null
+  }[]
+}
+export function acceptedAnalytics(accepted: AcceptedEconomics[]): AcceptedAnalytics {
+  const lifecycle = accepted.flatMap((a) => a.lifecycle)
+  const yes = accepted.filter((a) => a.outcome.firstPassAcceptance.state === 'Yes').length
+  const no = accepted.filter((a) => a.outcome.firstPassAcceptance.state === 'No').length
+  const stages = new Map<string, Run[]>()
+  for (const run of lifecycle) {
+    const key = JSON.stringify([run.role, run.runType])
+    stages.set(key, [...(stages.get(key) ?? []), run])
+  }
+  return {
+    sampleCount: accepted.length,
+    sliceIds: accepted.map((a) => a.slice.id),
+    lifecycleRunIds: lifecycle.map((run) => run.id),
+    knownLifecycleCostUSD: comparisonMetrics(lifecycle).costUSD,
+    costUSD: distribution(accepted.map((a) => a.metrics.costUSD.completeTotal)),
+    wallMinutes: distribution(accepted.map((a) => a.metrics.wallMinutes.completeTotal)),
+    firstPass: {
+      yes,
+      no,
+      unknown: accepted.length - yes - no,
+      determinable: yes + no,
+      rate: yes + no ? yes / (yes + no) : null
+    },
+    repair: {
+      recordedRunCount: accepted.reduce((sum, a) => sum + a.outcome.repair.recordedRunCount, 0),
+      costUSD: distribution(accepted.map(completeRepairCost)),
+      toImplementationCostRatio: distribution(accepted.map((a) => a.repairRatio))
+    },
+    quality: qualitySummary(accepted.map((a) => a.slice)),
+    stages: [...stages.entries()].map(([key, runs]) => ({
+      key,
+      role: runs[0].role,
+      runType: runs[0].runType,
+      ...runAnalytics(runs),
+      costUSD: comparisonMetrics(runs).costUSD,
+      wallMinutes: comparisonMetrics(runs).wallMinutes
+    })),
+    outcomes: accepted.map((a) => ({
+      sliceId: a.slice.id,
+      title: a.slice.title,
+      lifecycleRunIds: a.lifecycle.map((run) => run.id),
+      acceptedAt: a.slice.acceptedAt ?? null,
+      implementationCostUSD: comparisonMetrics(
+        a.lifecycle.filter(
+          (run) => run.role === 'Implementer' && !a.outcome.repair.runIds.includes(run.id)
+        )
+      ).costUSD,
+      acceptedCostUSD: a.metrics.costUSD,
+      wallMinutes: a.metrics.wallMinutes,
+      qualityGrade: a.slice.qualityGrade ?? null,
+      firstPass: a.outcome.firstPassAcceptance.state,
+      repairCostUSD: completeRepairCost(a)
+    }))
+  }
+}
 interface ComparisonGroup {
   key: string
   label: string
@@ -504,6 +724,7 @@ interface ComparisonGroup {
   defects: ReturnType<typeof defectSummary>
   discoveries: Discovery[]
   quality: ReturnType<typeof qualitySummary>
+  analytics: RunAnalytics
 }
 export interface ComparisonView {
   eligibleSlices: Slice[]
@@ -518,7 +739,11 @@ export interface ComparisonView {
   selectedGroup: ComparisonGroup | undefined
   shownRuns: Run[]
   accepted: ReturnType<typeof acceptedEconomics>[]
+  analytics: RunAnalytics
+  temporal: ReturnType<typeof temporalAnalytics>
+  acceptedAnalytics: ReturnType<typeof acceptedAnalytics>
 }
+export type ComparisonBaseView = Omit<ComparisonView, 'candidates' | 'selectedGroup' | 'shownRuns'>
 export interface ComparisonCandidate {
   key: string
   label: string
@@ -529,8 +754,14 @@ export interface ComparisonCandidate {
   discoveries: Discovery[]
   sliceDispositions: ReturnType<typeof recordedCounts>
 }
-export function compareData(data: Dataset, context: ComparisonContext): ComparisonView {
-  const cohort = selectCohort(data, context.filters, context.stageScopes)
+export function compareDataBase(data: Dataset, context: ComparisonContext): ComparisonBaseView {
+  const cohort = selectCohort(
+    data,
+    context.filters,
+    context.stageScopes,
+    context.dateRange,
+    context.outcomeFilters
+  )
   const runIds = new Set(cohort.runs.map((r) => r.id))
   const findings = data.findings.filter((f) => f.runId !== undefined && runIds.has(f.runId))
   const discoveries = data.discoveries.filter(
@@ -544,6 +775,7 @@ export function compareData(data: Dataset, context: ComparisonContext): Comparis
       return {
         ...group,
         stats: summarize(group.runs),
+        analytics: runAnalytics(group.runs),
         repair: roleSummary(group.runs, 'Repair'),
         critic: roleSummary(group.runs, 'Critic'),
         findings: groupFindings,
@@ -562,16 +794,36 @@ export function compareData(data: Dataset, context: ComparisonContext): Comparis
             ? b.stats.minutes - a.stats.minutes
             : 0) || a.label.localeCompare(b.label)
     )
-  const selectedGroup = groups.find((g) => g.key === context.selectedGroup)
+  const accepted = cohort.slices
+    .filter((s) => s.disposition === 'Accepted')
+    .map((slice) => acceptedEconomics(data, slice))
+  return {
+    ...cohort,
+    analytics: runAnalytics(cohort.runs),
+    temporal: temporalAnalytics(cohort.runs),
+    acceptedAnalytics: acceptedAnalytics(accepted),
+    summary: summarize(cohort.runs),
+    groups,
+    findings,
+    defects: defectSummary(findings),
+    discoveries,
+    accepted
+  }
+}
+function selectedCandidates(
+  data: Dataset,
+  view: ComparisonBaseView,
+  keys: string[]
+): ComparisonCandidate[] {
   const candidateLabels = derivedPresentationLabels(data, 'modelConfiguration')
   const candidateGroups = new Map(
-    groupRuns(data, cohort.runs, 'modelConfiguration').map((g) => [g.key, g.runs])
+    groupRuns(data, view.runs, 'modelConfiguration').map((g) => [g.key, g.runs])
   )
-  const candidates = (context.selectedCandidates ?? []).map((key): ComparisonCandidate => {
+  return keys.map((key): ComparisonCandidate => {
     const runs = candidateGroups.get(key) ?? []
     const ids = new Set(runs.map((run) => run.id))
     const sliceIds = new Set(runs.map((run) => run.sliceId))
-    const candidateFindings = findings.filter((finding) => ids.has(finding.runId!))
+    const candidateFindings = view.findings.filter((finding) => ids.has(finding.runId!))
     return {
       key,
       label: candidateLabels.get(key) ?? 'Unknown configuration (unavailable in dataset)',
@@ -581,26 +833,31 @@ export function compareData(data: Dataset, context: ComparisonContext): Comparis
       defects: defectSummary(candidateFindings),
       discoveries: data.discoveries.filter((d) => d.runId !== undefined && ids.has(d.runId)),
       sliceDispositions: recordedCounts(
-        cohort.slices.filter((s) => sliceIds.has(s.id)).map((s) => s.disposition)
+        view.slices.filter((s) => sliceIds.has(s.id)).map((s) => s.disposition)
       )
     }
   })
+}
+export function applyComparisonSelection(
+  data: Dataset,
+  view: ComparisonBaseView,
+  context: ComparisonContext
+): ComparisonView {
+  const selectedGroup = view.groups.find((g) => g.key === context.selectedGroup)
   return {
-    ...cohort,
-    summary: summarize(cohort.runs),
-    groups,
-    candidates,
-    findings,
-    defects: defectSummary(findings),
-    discoveries,
+    ...view,
+    candidates: context.selectedCandidates?.length
+      ? selectedCandidates(data, view, context.selectedCandidates)
+      : [],
     selectedGroup,
-    shownRuns: selectedGroup?.runs ?? cohort.runs,
-    accepted: cohort.slices
-      .filter((s) => s.disposition === 'Accepted')
-      .map((slice) => acceptedEconomics(data, slice))
+    shownRuns: selectedGroup?.runs ?? view.runs
   }
 }
+export function compareData(data: Dataset, context: ComparisonContext): ComparisonView {
+  return applyComparisonSelection(data, compareDataBase(data, context), context)
+}
 export interface AnalysisMetrics {
+  analytics: RunAnalytics
   runCount: number
   costUSD: MeasuredTotal
   meanPricedRunCostUSD: number | null
@@ -618,6 +875,9 @@ export interface ComparisonAnalysis {
   source: { datasetSchemaVersion: number; datasetRevision: number }
   generatedAt: string
   context: ComparisonContext
+  analytics: RunAnalytics
+  temporal: ReturnType<typeof temporalAnalytics>
+  acceptedAnalytics: ReturnType<typeof acceptedAnalytics>
   cohort: {
     eligibleSliceIds: string[]
     sliceIds: string[]
@@ -666,6 +926,7 @@ export interface ComparisonAnalysis {
 export function comparisonMetrics(runs: Run[]): AnalysisMetrics {
   const stats = summarize(runs)
   return {
+    analytics: runAnalytics(runs),
     evidence: runEvidence(runs),
     runCount: runs.length,
     costUSD: measured(stats.cost, stats.priced, runs.length),
@@ -712,6 +973,9 @@ export function comparisonExport(
     source: { datasetSchemaVersion: data.schemaVersion, datasetRevision: data.revision },
     generatedAt,
     context,
+    analytics: view.analytics,
+    temporal: view.temporal,
+    acceptedAnalytics: view.acceptedAnalytics,
     cohort: {
       eligibleSliceIds: view.eligibleSlices.map((s) => s.id),
       sliceIds: view.slices.map((s) => s.id),
@@ -775,7 +1039,17 @@ export function comparisonExport(
       usageMeter:
         'Percentage points consumed: remaining before minus remaining after; explicit burn overrides. Increases or a reported reset make inferred burn unknown.',
       cohort:
-        'Slice filters select eligible slices. A run must match every active run filter and at least one selected stage scope (if any) to qualify its slice. Full relevant lifecycle cost is retained for each qualifying accepted slice.',
+        'Slice and accepted-outcome filters select eligible slices. A run must match every active run filter, the run-start date range, and at least one selected stage scope (if any) to qualify its slice. Full relevant lifecycle cost is retained for each qualifying accepted slice.',
+      filterUnknowns:
+        'A null filter explicitly selects missing evidence, distinct from false, zero, empty/cleared filters, or literal source text Unknown. Provider text/ID and saved offer ID use recorded fields only. No inferred evidence-class, technical-stack, difficulty/coupling, or context-preparation fields exist in schema v1.',
+      dateRange:
+        'Inclusive canonical UTC timestamp bounds apply to run.startAt on the same qualifying run. Undated runs match only when includeUnknown is true. Lifecycle reopening remains independent of these bounds.',
+      outcomeFilters:
+        'Active outcome filters limit the entire cohort to accepted slices. Repair presence Yes uses explicit repair evidence; No requires established first-pass Yes. Repair cost burden Zero/Positive requires complete recorded repair cost without unresolved repair links or missing required work; otherwise Unknown.',
+      analytics:
+        'Run distributions use known run measurements. Accepted distributions use complete recorded per-slice totals only; knownLifecycleCostUSD separately sums known run costs across all qualifying accepted lifecycles. Each distribution includes sample count, known/unknown coverage, mean, median, min/max, and sample standard deviation (n-1; null below two known samples). These are descriptive statistics, not confidence or causal estimates.',
+      charts:
+        'Cost composition partitions the fully priced subset into fresh input, cached input, and output, reconciling to known run cost without adding reasoning. Time/cost points require both values; quality/cost points require recorded operator grade and complete recorded outcome cost. Missing points remain null in exported inputs. Date trends use recorded run starts in UTC with undated IDs listed separately and no zero-filled missing days.',
       candidates:
         'Selected Model Configuration keys partition scoped observed runs in selection order; they do not filter the base cohort or attribute accepted economics. Empty candidates have no evidence, not free work.',
       stages:
