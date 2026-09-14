@@ -6,7 +6,7 @@ Authoritative executable contract: GitHub Issue #10 — **Slice 5: Comparison An
 
 Frozen product baseline: `bcca9a972dd1060bb275cb3ce75d66298c020dd7` (`0.1.3`, accepted/merged Slice 4)
 
-This map is repository geography only. It does not restate the Slice 5 contract or worker-role instructions.
+This map was reconciled against that accepted product baseline. It is preparation-only repository geography and does not restate the Slice 5 contract or worker-role instructions.
 
 ## Primary comparison derivation path
 
