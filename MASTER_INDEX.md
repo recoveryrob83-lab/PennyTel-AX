@@ -1,7 +1,7 @@
 # PennyTel repository map
 
-Evidence-based map of the repository at accepted Slice 3 candidate
-`0e66af3c6972ccc5727d2403b601d678a77c5817` (product version `0.1.2`). This
+Evidence-based map of the repository at accepted Slice 4 product candidate
+`09a106ca49afb75fe05817ce0bac5bd293b8efa9` (product version `0.1.3`). This
 is a navigation aid for future slices, not a replacement for the assigned
 GitHub Issue or the authoritative contracts in `docs/`.
 
@@ -11,7 +11,7 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - v1 data contract and field semantics: [`docs/data-contract.md`](docs/data-contract.md)
 - Registry contract and update behavior: [`docs/model-registry.md`](docs/model-registry.md)
 - Comparison analysis contract: [`docs/comparison-export.md`](docs/comparison-export.md)
-- Active Slice 4 repository map: [`docs/context-maps/Slice_4_Accepted_Outcome_Economics_Context_Map.md`](docs/context-maps/Slice_4_Accepted_Outcome_Economics_Context_Map.md)
+- Accepted Slice 4 context map: [`docs/context-maps/Slice_4_Accepted_Outcome_Economics_Context_Map.md`](docs/context-maps/Slice_4_Accepted_Outcome_Economics_Context_Map.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
 - Canonical registry input: [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json)
 - Runtime/verification record: [`docs/verification.md`](docs/verification.md) and [`docs/bounded-repair-verification.md`](docs/bounded-repair-verification.md)
@@ -141,7 +141,7 @@ evidence blocks loading/writing rather than silently starting empty.
   authoritative.
 - Raw dataset export reads the main-owned snapshot. Comparison export is a
   distinct derived artifact with `kind: "pennytel-comparison"` and is not
-  importable. Slice 3 does not change raw dataset import/export semantics.
+  importable. Slice 4 does not change raw dataset import/export semantics.
 - [`docs/comparison-export.md`](docs/comparison-export.md) documents the
   additive analysis-v1 configuration dimensions and their identity-key versus
   presentation-label semantics. Comparison export receives only revision and
@@ -278,9 +278,13 @@ The bundled seed is statically imported by `src/main/store.ts` from
   categorical evidence. Unknown, known zero, partial, and empty measurements
   remain distinguishable in both UI and analysis JSON. Reasoning tokens remain
   a subset of output and are not separately billed.
-- `acceptedEconomics()` remains full-lifecycle behavior: candidate selection
-  and stage scoping qualify comparison evidence but do not attribute accepted
-  outcomes to a candidate or narrow lifecycle economics.
+- `acceptedEconomics()` derives Slice 4 accepted-outcome evidence while
+  preserving full-lifecycle behavior: cohort filters and stage scopes qualify
+  a slice, then economics reopen its full relevant same-slice lifecycle.
+  `outcome` exposes exact stage composition, acceptance/evidence gaps,
+  conservative first-pass `Yes`/`No`/`Unknown`, explicit-link-aware repair
+  burden, paired reasoning/output share, runtime evidence, sample count, and
+  source run IDs. Candidate selection does not narrow accepted economics.
 - No automated ranking, blended quality score, causal claim, or blame inference
   is implemented.
 
@@ -294,8 +298,10 @@ The bundled seed is statically imported by `src/main/store.ts` from
 - [`src/renderer/src/pages/Compare.tsx`](src/renderer/src/pages/Compare.tsx)
   owns comparison view controls: group-by, sort, cohort filters, separate
   multi-candidate Model Configuration selection, exact stage scopes, group
-  selection, side-by-side observed-run evidence, accepted-slice economics, and
-  comparison export. It defaults to Model Configuration and uses shared keyed
+  selection, side-by-side observed-run evidence, accepted-outcome economics,
+  and comparison export. Accepted outcomes expose summary rows plus expandable
+  lifecycle stages, token/reasoning evidence, runtime coverage, repair evidence,
+  and source runs. It defaults to Model Configuration and uses shared keyed
   options so collision-safe labels remain stable through filtering and export.
 - [`src/renderer/src/pages/Data.tsx`](src/renderer/src/pages/Data.tsx) shows
   the storage path, exports raw JSON, accepts pasted/file JSON, previews counts
@@ -323,7 +329,7 @@ The bundled seed is statically imported by `src/main/store.ts` from
 - [`src/renderer/src/App.tsx`](src/renderer/src/App.tsx) and the main-process
   package metadata share the `package.json` version source; the sidebar/header
   display and `comparisonExport()` app metadata therefore remain aligned at
-  version `0.1.2` for this candidate.
+  version `0.1.3` for the accepted Slice 4 product candidate.
 
 ## Tests by architectural area
 
@@ -339,6 +345,7 @@ under `tests/**/*.test.{ts,tsx}`.
 | Filesystem-safe export | [`tests/export.test.ts`](tests/export.test.ts) | Regular destinations, live/backup aliases, links, dangling/unresolvable identities, raw and comparison output |
 | Configuration identity and comparison | [`tests/configuration.test.ts`](tests/configuration.test.ts), [`tests/configuration-fixtures.ts`](tests/configuration-fixtures.ts), [`tests/comparison.test.ts`](tests/comparison.test.ts) | Canonical/alias identity, recorded thinking and Unknown behavior, ExtraHigh/XHigh presentation, collision-safe labels and bounded derived requests, multi-candidate/stage selection, grouping/filtering/export, raw import and historical cost/snapshot stability |
 | Comparison calculations/export | [`tests/comparison.test.ts`](tests/comparison.test.ts) | Cohort qualification, ORed stage scopes, full lifecycle retention, source and derived filters/grouping/order/selection, candidate evidence coverage, quality, unknown/zero/partial measurements, stale/untrusted export requests |
+| Accepted-outcome economics | [`tests/accepted-outcome.test.ts`](tests/accepted-outcome.test.ts), [`tests/accepted-outcome-fixture.json`](tests/accepted-outcome-fixture.json) | Multi-stage/cross-model lifecycle economics, first-pass Yes/No/Unknown, repair-link deduplication, partial/zero evidence, frozen pricing, reasoning coverage, export and raw-data stability |
 | Renderer comparison | [`tests/compare-ui.test.tsx`](tests/compare-ui.test.tsx) | Shared cohort context, 2+/3+ configuration selection, exact stage controls, collision labels, keyed export payload, export failure state, canonical version display across pages |
 | Renderer editors/startup | [`tests/editor.test.tsx`](tests/editor.test.tsx) | Acceptance editing, local/exact timestamps, drafts, failed saves, unknown booleans, discard, same-slice relationship choices, startup failure |
 | Renderer registry | [`tests/registry-ui.test.tsx`](tests/registry-ui.test.tsx) | Metadata/benchmark display, invalid-update rejection, editable failed draft, preview/install handoff |
@@ -368,8 +375,9 @@ scripts exercise the real main/preload/renderer/filesystem path.
   scripts in this order: [`scripts/electron-smoke.mjs`](scripts/electron-smoke.mjs),
   [`scripts/electron-repair-qa.mjs`](scripts/electron-repair-qa.mjs),
   [`scripts/electron-new-profile-qa.mjs`](scripts/electron-new-profile-qa.mjs),
-  [`scripts/electron-registry-qa.mjs`](scripts/electron-registry-qa.mjs), and
-  [`scripts/electron-configuration-qa.mjs`](scripts/electron-configuration-qa.mjs).
+  [`scripts/electron-registry-qa.mjs`](scripts/electron-registry-qa.mjs),
+  [`scripts/electron-configuration-qa.mjs`](scripts/electron-configuration-qa.mjs),
+  and [`scripts/electron-accepted-outcome-qa.mjs`](scripts/electron-accepted-outcome-qa.mjs).
   They use Playwright's Electron driver, isolated temporary
   `test-results/electron-qa-*`/repair/new-profile/registry/configuration-runtime-*
   profiles, real IPC,
@@ -381,13 +389,20 @@ scripts exercise the real main/preload/renderer/filesystem path.
   exact stage scopes, coverage-aware Unknown/zero evidence, authoritative
   comparison export, frozen raw bytes/costs across raw export and restart, and
   visible package version behavior.
-- Fresh Codex worker sandboxes may deny Electron before application startup
-  with `Process failed to launch!`. Running with `DEBUG=pw:browser` may expose
-  `sandbox_host_linux.cc:41` and `shutdown: Operation not permitted (1)`.
-  Treat that signature as a worker-environment denial rather than a PennyTel
-  product defect. Use the configured approval/escalation path for isolated QA;
-  do not modify application code to work around the sandbox denial. If
-  escalation also fails, report the blocker.
+- `electron-accepted-outcome-qa.mjs` exercises the production Electron path
+  against an isolated synthetic profile, proving accepted-outcome summaries,
+  six-stage cross-model lifecycle retention, first-pass states, known zero
+  versus Unknown, stage/source-run inspection, export, restart/raw-data
+  stability, and narrow-window horizontal-scroll behavior.
+- Fresh Codex worker sandboxes are known to deny ordinary Electron launch
+  before PennyTel startup. For Electron QA in this worker environment, use the
+  configured approved/elevated execution path first rather than attempting the
+  known-bad sandboxed route. If an unexpected launch failure still occurs,
+  `DEBUG=pw:browser` may expose `sandbox_host_linux.cc:41` and
+  `shutdown: Operation not permitted (1)`; classify that as environment denial,
+  not a PennyTel defect. Never weaken application/Chromium security to bypass
+  it. If approved execution is unavailable or also fails, report
+  `BLOCKED BY ENVIRONMENT` with diagnostics.
 - [`scripts/electron-qa-capture.mjs`](scripts/electron-qa-capture.mjs) restores
   and focuses the isolated native QA window before screenshots. A working
   desktop surface is required; Electron runtime behavior is authoritative for
