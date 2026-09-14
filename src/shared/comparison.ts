@@ -22,6 +22,147 @@ import {
   type MeasuredTotal
 } from './metrics'
 
+export interface AcceptedOutcomeEvidence {
+  sampleCount: 1
+  stages: (AnalysisMetrics & { role: Role; runType: string; runIds: string[] })[]
+  acceptanceWindow: { bounded: boolean; undatedRunIds: string[]; completeTiming: boolean }
+  evidenceGaps: string[]
+  firstPassAcceptance: {
+    state: 'Yes' | 'No' | 'Unknown'
+    basis: string
+    runIds: string[]
+    findingIds: string[]
+  }
+  repair: {
+    recordedRunCount: number
+    runIds: string[]
+    requiredRunIds: string[]
+    findingIds: string[]
+    costUSD: MeasuredTotal
+    toImplementationCostRatio: number | null
+  }
+  reasoningShare: { ratio: number | null; knownRuns: number; totalRuns: number; complete: boolean }
+}
+
+function acceptedOutcomeEvidence(
+  slice: Slice,
+  lifecycle: Run[],
+  findings: Finding[]
+): AcceptedOutcomeEvidence {
+  const ids = new Set(lifecycle.map((run) => run.id))
+  // Later evaluations stay available in slice findings, but cannot rewrite this acceptance.
+  // Unlinked findings have no timestamp in schema v1 and therefore remain possible evidence.
+  const relevantFindings = findings.filter((f) => !f.runId || ids.has(f.runId))
+  const repairFindings = relevantFindings.filter(
+    (f) =>
+      (f.repairRunId !== undefined && ids.has(f.repairRunId)) ||
+      (f.status !== 'Dismissed' && (f.repairRequired === true || f.status === 'Repaired'))
+  )
+  const linkedRepairs = new Set(
+    repairFindings.flatMap((f) => (f.repairRunId ? [f.repairRunId] : []))
+  )
+  const repairs = lifecycle.filter((run) => run.role === 'Repair' || linkedRepairs.has(run.id))
+  const requiredRuns = lifecycle.filter((run) => run.result === 'Needs repair')
+  const implementations = lifecycle.filter(
+    (run) => run.role === 'Implementer' && !linkedRepairs.has(run.id)
+  )
+  const acceptingRuns = lifecycle.filter((run) => run.result === 'Accepted')
+  const acceptanceWindow = {
+    bounded: !!slice.acceptedAt,
+    undatedRunIds: lifecycle.filter((run) => !run.startAt).map((run) => run.id),
+    completeTiming:
+      !!slice.acceptedAt &&
+      lifecycle.length > 0 &&
+      lifecycle.every((run) => !!run.startAt && !!run.endAt)
+  }
+  const gaps: string[] = []
+  if (!lifecycle.length) gaps.push('No lifecycle runs recorded.')
+  if (!slice.acceptedAt) gaps.push('Acceptance timestamp unknown; all related runs included.')
+  if (lifecycle.some((run) => !run.startAt || !run.endAt))
+    gaps.push('Run timestamps incomplete; lifecycle ordering is uncertain.')
+  if (!implementations.length) gaps.push('Implementation evidence missing.')
+  if (!acceptingRuns.length) gaps.push('No run explicitly records an Accepted result.')
+  if (lifecycle.some((run) => run.result === undefined)) gaps.push('Run results incomplete.')
+  const explicitRepair = repairs.length > 0 || requiredRuns.length > 0 || repairFindings.length > 0
+  // A positive claim needs direct acceptance of the single implementation, not just the
+  // slice disposition or an empty repair list. Completed + later review is not an assertion
+  // that the original implementation was accepted without any unrecorded repair.
+  const directAcceptance = implementations.length === 1 && implementations[0].result === 'Accepted'
+  const successfulResults = lifecycle.every(
+    (run) => run.result === 'Completed' || run.result === 'Accepted'
+  )
+  const uncertainFindings = relevantFindings.some(
+    (f) => f.status !== 'Dismissed' && f.severity !== 'Observation' && f.repairRequired !== false
+  )
+  const firstPassState = explicitRepair
+    ? 'No'
+    : directAcceptance && !gaps.length && successfulResults && !uncertainFindings
+      ? 'Yes'
+      : 'Unknown'
+  const repairMetrics = comparisonMetrics(repairs)
+  if (!repairs.length && firstPassState === 'Yes') repairMetrics.costUSD = measured(0, 0, 0, true)
+  const implementationCost = comparisonMetrics(implementations).costUSD.completeTotal
+  const missingRepairRun =
+    (requiredRuns.length > 0 && !repairs.length) ||
+    repairFindings.some((f) => !f.repairRunId || !ids.has(f.repairRunId))
+  const repairRatio =
+    !missingRepairRun &&
+    implementationCost !== null &&
+    implementationCost > 0 &&
+    repairMetrics.costUSD.completeTotal !== null
+      ? repairMetrics.costUSD.completeTotal / implementationCost
+      : null
+  const pairs = lifecycle.filter(
+    (run) => run.reasoningTokens !== undefined && run.outputTokens !== undefined
+  )
+  const output = pairs.reduce((sum, run) => sum + run.outputTokens!, 0)
+  const stages = new Map<string, { role: Role; runType: string; runs: Run[] }>()
+  for (const run of lifecycle) {
+    const key = JSON.stringify([run.role, run.runType])
+    if (!stages.has(key)) stages.set(key, { role: run.role, runType: run.runType, runs: [] })
+    stages.get(key)!.runs.push(run)
+  }
+  return {
+    sampleCount: 1,
+    stages: [...stages.values()].map(({ role, runType, runs }) => ({
+      role,
+      runType,
+      runIds: runs.map((run) => run.id),
+      ...comparisonMetrics(runs)
+    })),
+    acceptanceWindow,
+    evidenceGaps: gaps,
+    firstPassAcceptance: {
+      state: firstPassState,
+      basis:
+        firstPassState === 'No'
+          ? 'Recorded repair work or an explicit repair requirement.'
+          : firstPassState === 'Yes'
+            ? 'Single implementation explicitly Accepted, with bounded, dated, successful recorded lifecycle evidence and no conflicting repair evidence.'
+            : 'The recorded evidence does not establish acceptance of the first implementation without repair.',
+      runIds:
+        firstPassState === 'No'
+          ? [...new Set([...repairs, ...requiredRuns].map((run) => run.id))]
+          : implementations.filter((run) => run.result === 'Accepted').map((run) => run.id),
+      findingIds: repairFindings.map((f) => f.id)
+    },
+    repair: {
+      recordedRunCount: repairs.length,
+      runIds: repairs.map((run) => run.id),
+      requiredRunIds: requiredRuns.map((run) => run.id),
+      findingIds: repairFindings.map((f) => f.id),
+      costUSD: repairMetrics.costUSD,
+      toImplementationCostRatio: repairRatio
+    },
+    reasoningShare: {
+      ratio: output > 0 ? pairs.reduce((sum, run) => sum + run.reasoningTokens!, 0) / output : null,
+      knownRuns: pairs.length,
+      totalRuns: lifecycle.length,
+      complete: lifecycle.length > 0 && pairs.length === lifecycle.length
+    }
+  }
+}
+
 export type { MeasuredTotal } from './metrics'
 
 // Bounded, ephemeral analysis state. Eight columns support a small working set;
@@ -320,6 +461,8 @@ export function acceptedEconomics(
   slice: Slice
   lifecycle: Run[]
   stats: ReturnType<typeof summarize>
+  metrics: AnalysisMetrics
+  outcome: AcceptedOutcomeEvidence
   repair: ReturnType<typeof roleSummary>
   critic: ReturnType<typeof roleSummary>
   repairRatio: number | null
@@ -334,16 +477,16 @@ export function acceptedEconomics(
   )
   const stats = summarize(lifecycle)
   const findings = data.findings.filter((f) => f.sliceId === slice.id)
+  const outcome = acceptedOutcomeEvidence(slice, lifecycle, findings)
   return {
     slice,
     lifecycle,
     stats,
+    metrics: comparisonMetrics(lifecycle),
+    outcome,
     repair: roleSummary(lifecycle, 'Repair'),
     critic: roleSummary(lifecycle, 'Critic'),
-    repairRatio:
-      stats.priced === stats.total && stats.implementationCost > 0
-        ? stats.repairCost / stats.implementationCost
-        : null,
+    repairRatio: outcome.repair.toImplementationCostRatio,
     elapsedMinutes: timeToAccepted(slice, lifecycle),
     findings,
     defects: defectSummary(findings),
@@ -500,6 +643,7 @@ export interface ComparisonAnalysis {
   })[]
   candidates: (Omit<ComparisonCandidate, 'runs'> & { runIds: string[]; sliceIds: string[] })[]
   acceptedSlices: (AnalysisMetrics & {
+    outcome: AcceptedOutcomeEvidence
     sliceId: string
     title: string
     productionModel: Slice['productionModel'] | null
@@ -607,7 +751,8 @@ export function comparisonExport(
       qualityGrade: a.slice.qualityGrade ?? null,
       acceptedAt: a.slice.acceptedAt ?? null,
       lifecycleRunIds: a.lifecycle.map((r) => r.id),
-      ...comparisonMetrics(a.lifecycle),
+      ...a.metrics,
+      outcome: a.outcome,
       timeToAcceptedMinutes: a.elapsedMinutes,
       timeBasis:
         a.slice.timeToAcceptedMinutes !== undefined
@@ -615,14 +760,7 @@ export function comparisonExport(
           : a.elapsedMinutes !== null
             ? 'First recorded run to acceptance'
             : 'Unknown',
-      acceptanceWindow: {
-        bounded: !!a.slice.acceptedAt,
-        undatedRunIds: a.lifecycle.filter((r) => !r.startAt).map((r) => r.id),
-        completeTiming:
-          !!a.slice.acceptedAt &&
-          a.lifecycle.length > 0 &&
-          a.lifecycle.every((r) => !!r.startAt && !!r.endAt)
-      },
+      acceptanceWindow: a.outcome.acceptanceWindow,
       repairToImplementationCostRatio: a.repairRatio,
       defects: a.defects,
       findingIds: a.findings.map((f) => f.id),
@@ -644,6 +782,12 @@ export function comparisonExport(
         'Role scopes match structured role exactly. Run type scopes match exact recorded text, without normalization or inferred Re-critic/Verification. No scopes means all otherwise matching runs.',
       acceptance:
         'Runs starting by acceptance, plus undated runs; without a cutoff, all runs. Evidence includes later evaluation.',
+      acceptedOutcome:
+        'One sample per accepted slice. Stage composition groups exact recorded role/runType pairs. Coverage describes recorded runs, not proof that all work was captured. First-pass Yes requires a single explicitly Accepted implementation and bounded, dated, successful lifecycle evidence without conflicting repair evidence; absent repair rows alone never imply success.',
+      acceptedRepair:
+        'Recorded repair runs are the union of Repair-role runs and explicit same-lifecycle repair links. Counts are recorded runs, not inferred cycles. Zero recorded runs does not prove zero repairs. Repair burden is unknown when required repair evidence is unlinked or unpriced.',
+      reasoningShare:
+        'Reasoning / output over runs with both counts, with paired-run coverage; a zero denominator is unknown. Reasoning is never charged independently.',
       findings:
         'Counts reflect recorded evidence, exclude dismissed findings and observations from defects, and attribute discovery rather than fault to linked runs.',
       quality:

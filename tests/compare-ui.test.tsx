@@ -9,6 +9,8 @@ import { configurationFixture } from './configuration-fixtures'
 import { modelConfiguration } from '../src/shared/configuration'
 import App from '../src/renderer/src/App'
 import { version } from '../package.json'
+import acceptedFixture from './accepted-outcome-fixture.json'
+import { validateDataset } from '../src/shared/data'
 import {
   compareData,
   MAX_COMPARISON_CANDIDATES,
@@ -17,6 +19,62 @@ import {
 
 afterEach(cleanup)
 describe('comparison UI uses shared cohort context', () => {
+  it('shows outcome samples, cross-model lifecycle stages, token coverage and opens downstream source runs', async () => {
+    const data: unknown = structuredClone(acceptedFixture)
+    validateDataset(data)
+    const user = userEvent.setup()
+    const onOpenRun = vi.fn()
+    render(<Compare data={data} onOpenRun={onOpenRun} onOpenSlice={vi.fn()} />)
+    await user.click(screen.getByText('Narrow the cohort'))
+    await user.selectOptions(
+      screen.getByLabelText('Filter Model Configuration'),
+      modelConfiguration(data, data.runs[1]).key
+    )
+    await user.click(screen.getByRole('checkbox', { name: 'Implementation (role: Implementer)' }))
+    const region = within(screen.getByRole('region', { name: 'Accepted outcome comparison' }))
+    const mixed = region.getByRole('row', { name: /Cross-model accepted repair/ })
+    expect(mixed).toHaveTextContent('$2.5248')
+    expect(mixed).toHaveTextContent('1.2h6/6 recorded')
+    expect(mixed).toHaveTextContent('1.5hFirst recorded start to acceptance')
+    expect(mixed).toHaveTextContent('1 recorded repair runs')
+    expect(mixed).toHaveTextContent('No: 5 · Yes: 1')
+    const summary = screen.getByText('Inspect lifecycle · Cross-model accepted repair · 6 runs')
+    await user.click(summary)
+    const detail = within(summary.closest('details')!)
+    const stages = within(
+      detail.getByRole('table', { name: 'Lifecycle stages · Cross-model accepted repair' })
+    )
+    for (const name of ['Context map', 'Independent critic', 'Repair', 'Re-critic', 'Verification'])
+      expect(stages.getByRole('row', { name: new RegExp(`^${name}`) })).toBeVisible()
+    expect(
+      detail.getByRole('table', { name: 'Lifecycle totals · Cross-model accepted repair' })
+    ).toHaveTextContent('3,302,400')
+    expect(
+      detail.getByRole('table', { name: 'Lifecycle totals · Cross-model accepted repair' })
+    ).toHaveTextContent('17.5%')
+    await user.click(detail.getByRole('button', { name: 'Repair' }))
+    expect(onOpenRun).toHaveBeenCalledWith(data.runs.find((r) => r.id === 'luna-repair'))
+  })
+  it('visibly distinguishes Yes, No, Unknown, missing runtime telemetry and known zero outcomes', () => {
+    const data: unknown = structuredClone(acceptedFixture)
+    validateDataset(data)
+    render(<Compare data={data} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
+    const table = within(screen.getByRole('region', { name: 'Accepted outcome comparison' }))
+    const cells = (name: string): HTMLElement[] =>
+      Array.from(table.getByRole('row', { name: new RegExp(name) }).querySelectorAll('th, td'))
+    expect(cells('Directly accepted implementation')[4]).toHaveTextContent(/^Yes/)
+    expect(cells('Cross-model accepted repair')[4]).toHaveTextContent(/^No/)
+    expect(cells('Incomplete accepted lifecycle')[4]).toHaveTextContent(/^Unknown/)
+    expect(cells('Incomplete accepted lifecycle')[6]).toHaveTextContent(
+      'Unknown0/1 recorded · incomplete'
+    )
+    expect(cells('Incomplete accepted lifecycle')[5]).toHaveTextContent('Total repairs: Unknown')
+    expect(cells('Accepted with no recorded runs')[1]).toHaveTextContent(
+      'Unknown0/0 recorded · incomplete'
+    )
+    expect(cells('Recorded zero-cost acceptance')[1]).toHaveTextContent('$0.001/1 recorded')
+    expect(screen.getByText(/Sample count: 5 accepted outcomes/)).toBeVisible()
+  })
   it('selects 2 then 3+ configurations, scopes evidence, retains empty candidates and exports the shared workspace', async () => {
     const user = userEvent.setup()
     const data = configurationFixture()
@@ -215,7 +273,7 @@ describe('comparison UI uses shared cohort context', () => {
   })
 
   it('keeps the canonical package version visible across ordinary pages', async () => {
-    expect(version).toBe('0.1.2')
+    expect(version).toBe('0.1.3')
     const user = userEvent.setup()
     window.pennytel = {
       load: vi.fn().mockResolvedValue({ data: configurationFixture(), path: '/qa/telemetry.json' }),

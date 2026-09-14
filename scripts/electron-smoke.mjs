@@ -304,7 +304,16 @@ try {
   await acceptedSection
     .getByRole('button', { name: 'Synthetic QA · accepted work', exact: true })
     .waitFor()
-  await acceptedSection.getByText('$0.42 / $0.42', { exact: false }).waitFor()
+  await acceptedSection.getByText(/Inspect lifecycle · Synthetic QA · accepted work ·/).click()
+  const lifecycleStages = acceptedSection.getByRole('table', {
+    name: 'Lifecycle stages · Synthetic QA · accepted work',
+    exact: true
+  })
+  for (const stage of ['Criticism', 'Repair'])
+    assert.match(
+      await lifecycleStages.getByRole('row', { name: new RegExp(`^${stage}`) }).innerText(),
+      /\$0\.42/
+    )
   await captureElectron(app, page, {
     path: join(directory, '03-filtered-cohort.png'),
     fullPage: true

@@ -600,29 +600,30 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
             is accepted.
           </Empty>
         ) : (
-          <div className="table-wrap">
+          <div
+            className="table-wrap candidate-table"
+            role="region"
+            aria-label="Accepted outcome comparison"
+            tabIndex={0}
+          >
             <table>
               <thead>
                 <tr>
                   <th>Accepted slice / workflow</th>
-                  <th>Preferred / quality</th>
                   <th>Cost to accepted</th>
+                  <th>Lifecycle wall time</th>
                   <th>Time to accepted</th>
-                  <th>Repair / critic</th>
-                  <th>Repair passes</th>
-                  <th>Defect evidence</th>
-                  <th>Validated discoveries</th>
+                  <th>First-pass acceptance</th>
+                  <th>Repair burden</th>
+                  <th>Runtime QA evidence</th>
                 </tr>
               </thead>
               <tbody>
                 {accepted.map((economics) => {
-                  const { slice: s, stats, repair, critic, repairRatio } = economics
-                  const defects = economics.findings.filter(
-                    (f) => f.severity !== 'Observation' && f.status !== 'Dismissed'
-                  )
+                  const { slice: s, metrics, outcome } = economics
                   return (
                     <tr key={s.id}>
-                      <td>
+                      <th scope="row">
                         <button className="record-link" onClick={() => onOpenSlice(s.id)}>
                           {s.title}
                         </button>
@@ -630,21 +631,30 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
                           {s.productionModel ?? 'Unknown workflow'} · {s.ambiguity ?? 'Unknown'}{' '}
                           ambiguity
                         </small>
-                      </td>
-                      <td>
-                        {s.preferredCandidate ?? 'No preference'}
+                        <small>1 accepted outcome · {metrics.runCount} recorded runs</small>
                         <small>Quality: {qualityLabel(s.qualityGrade)}</small>
-                      </td>
+                        <small>Preferred: {s.preferredCandidate ?? 'No preference'}</small>
+                      </th>
+                      <td>{measurement(metrics.costUSD, money)}</td>
                       <td>
-                        {stats.priced ? money(stats.cost) : 'Unknown'}
-                        <small>
-                          {stats.priced}/{stats.total} priced
-                          {stats.priced < stats.total ? ' · incomplete' : ''}
-                          {!s.acceptedAt ? ' · all runs (no cutoff)' : ''}
-                        </small>
+                        {measurement(metrics.wallMinutes, duration)}
+                        <small>Sum of recorded run time</small>
                       </td>
                       <td>
                         {duration(economics.elapsedMinutes)}
+                        <small>
+                          {s.timeToAcceptedMinutes !== undefined
+                            ? 'Operator measured'
+                            : economics.elapsedMinutes !== null
+                              ? 'First recorded start to acceptance'
+                              : 'Unknown elapsed time'}
+                        </small>
+                        <small>
+                          {outcome.acceptanceWindow.completeTiming
+                            ? 'Recorded timing complete'
+                            : 'Timing incomplete'}
+                          {!s.acceptedAt ? ' · no acceptance cutoff' : ''}
+                        </small>
                         {s.acceptedAt && (
                           <small>
                             <time dateTime={s.acceptedAt}>{displayTimestamp(s.acceptedAt)}</time>
@@ -652,22 +662,31 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
                         )}
                       </td>
                       <td>
-                        {money(repair.cost)} / {money(critic.cost)}
-                        <small>Repair / implementation: {percent(repairRatio)}</small>
-                      </td>
-                      <td>{stats.repairRuns}</td>
-                      <td>
-                        {['P0', 'P1', 'P2']
-                          .map(
-                            (sev) => `${sev}: ${defects.filter((f) => f.severity === sev).length}`
-                          )
-                          .join(' · ')}
+                        {outcome.firstPassAcceptance.state}
                         <small>
-                          {[...new Set(defects.map((f) => f.category))].join(', ') ||
-                            'None recorded'}
+                          {outcome.firstPassAcceptance.state === 'Yes'
+                            ? 'Implementation accepted directly'
+                            : outcome.firstPassAcceptance.state === 'No'
+                              ? 'Repair recorded or required'
+                              : 'Insufficient acceptance evidence'}
                         </small>
                       </td>
-                      <td>{economics.discoveries.length}</td>
+                      <td>
+                        {outcome.repair.recordedRunCount} recorded repair runs
+                        <small>Repair cost: {measurement(outcome.repair.costUSD, money)}</small>
+                        <small>
+                          Repair / implementation:{' '}
+                          {percent(outcome.repair.toImplementationCostRatio)}
+                        </small>
+                        {!outcome.repair.recordedRunCount &&
+                          outcome.firstPassAcceptance.state !== 'Yes' && (
+                            <small>Total repairs: Unknown</small>
+                          )}
+                      </td>
+                      <td>
+                        {counts(metrics.evidence.runtimeTested)}
+                        <small>Recorded runtime tested; no separate QA verdict</small>
+                      </td>
                     </tr>
                   )
                 })}
@@ -675,11 +694,115 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
             </table>
           </div>
         )}
+        <p className="muted">
+          Sample count: {accepted.length} accepted outcomes. Coverage below describes recorded
+          evidence; unrecorded lifecycle work cannot be counted.
+        </p>
+        {accepted.map((economics) => {
+          const { slice, metrics, outcome } = economics
+          return (
+            <details key={slice.id} className="candidate-evidence">
+              <summary>
+                Inspect lifecycle · {slice.title} · {metrics.runCount} runs
+              </summary>
+              <p className="muted">
+                {outcome.evidenceGaps.join(' ') ||
+                  'Acceptance, implementation, timestamps, and results are recorded.'}{' '}
+                Missing stages are Unknown; stage names below are exact recorded run types with
+                their structured roles.
+              </p>
+              <p>
+                First-pass acceptance: {outcome.firstPassAcceptance.state}.{' '}
+                {outcome.firstPassAcceptance.basis}
+              </p>
+              <div className="table-wrap">
+                <table aria-label={`Lifecycle totals · ${slice.title}`}>
+                  <thead>
+                    <tr>
+                      <th>Fresh input tokens</th>
+                      <th>Cached input tokens</th>
+                      <th>Output tokens</th>
+                      <th>Reasoning within output</th>
+                      <th>Reasoning share</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      {(
+                        [
+                          'inputTokens',
+                          'cachedInputTokens',
+                          'outputTokens',
+                          'reasoningTokens'
+                        ] as const
+                      ).map((key) => (
+                        <td key={key}>{measurement(metrics.evidence.numeric[key])}</td>
+                      ))}
+                      <td>
+                        {percent(outcome.reasoningShare.ratio)}
+                        <small>
+                          {outcome.reasoningShare.knownRuns}/{outcome.reasoningShare.totalRuns}{' '}
+                          paired runs{outcome.reasoningShare.complete ? '' : ' · incomplete'}
+                        </small>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div className="table-wrap">
+                <table aria-label={`Lifecycle stages · ${slice.title}`}>
+                  <thead>
+                    <tr>
+                      <th>Recorded stage / role</th>
+                      <th>Runs</th>
+                      <th>Cost</th>
+                      <th>Wall time</th>
+                      <th>Runtime tested</th>
+                      <th>Results</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {outcome.stages.map((stage) => (
+                      <tr key={JSON.stringify([stage.role, stage.runType])}>
+                        <td>
+                          {stage.runType}
+                          <small>Role: {stage.role}</small>
+                        </td>
+                        <td>{stage.runCount}</td>
+                        <td>{measurement(stage.costUSD, money)}</td>
+                        <td>{measurement(stage.wallMinutes, duration)}</td>
+                        <td>{counts(stage.evidence.runtimeTested)}</td>
+                        <td>{counts(stage.evidence.result)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p>
+                Defect evidence:{' '}
+                {(['P0', 'P1', 'P2'] as const)
+                  .map((severity) => `${severity}: ${economics.defects.bySeverity[severity]}`)
+                  .join(' · ')}
+                . Validated discoveries: {economics.discoveries.length}. Categories:{' '}
+                {Object.entries(economics.defects.byCategory)
+                  .filter(([, count]) => count > 0)
+                  .map(([category]) => category)
+                  .join(', ') || 'None recorded'}
+                .
+              </p>
+              <RunTable runs={economics.lifecycle} onOpen={onOpenRun} />
+            </details>
+          )
+        })}
         <p className="footnote">
           Acceptance costs include all candidates and overhead up to the acceptance timestamp, plus
           undated runs. Runs after acceptance are excluded when dated. Findings and discoveries show
           the entire slice’s evidence, including later evaluation. No inferred quality score is
-          imposed.
+          imposed. Reasoning tokens are included in output and never billed separately. Repair
+          counts count recorded runs and explicit repair links, not inferred cycles. No repair rows
+          alone do not establish first-pass acceptance. Runtime-tested Yes/No counts preserve
+          missing values as Unknown and do not assert operator acceptance or a passing runtime
+          result.
         </p>
       </section>
     </>
