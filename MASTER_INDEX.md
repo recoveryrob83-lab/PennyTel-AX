@@ -1,7 +1,7 @@
 # PennyTel repository map
 
-Evidence-based map of the repository at accepted Slice 4 product candidate
-`09a106ca49afb75fe05817ce0bac5bd293b8efa9` (product version `0.1.3`). This
+Evidence-based map of the repository at accepted Slice 5 product candidate
+`92b258170f51098968d5f235a10e539df1012bb5` (product version `0.1.4`). This
 is a navigation aid for future slices, not a replacement for the assigned
 GitHub Issue or the authoritative contracts in `docs/`.
 
@@ -12,6 +12,7 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - Registry contract and update behavior: [`docs/model-registry.md`](docs/model-registry.md)
 - Comparison analysis contract: [`docs/comparison-export.md`](docs/comparison-export.md)
 - Accepted Slice 4 context map: [`docs/context-maps/Slice_4_Accepted_Outcome_Economics_Context_Map.md`](docs/context-maps/Slice_4_Accepted_Outcome_Economics_Context_Map.md)
+- Slice 5 comparison analytics/filtering context map: [`docs/context-maps/Slice_5_Comparison_Analytics_and_Filters_Context_Map.md`](docs/context-maps/Slice_5_Comparison_Analytics_and_Filters_Context_Map.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
 - Canonical registry input: [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json)
 - Runtime/verification record: [`docs/verification.md`](docs/verification.md) and [`docs/bounded-repair-verification.md`](docs/bounded-repair-verification.md)
@@ -141,12 +142,14 @@ evidence blocks loading/writing rather than silently starting empty.
   authoritative.
 - Raw dataset export reads the main-owned snapshot. Comparison export is a
   distinct derived artifact with `kind: "pennytel-comparison"` and is not
-  importable. Slice 4 does not change raw dataset import/export semantics.
+  importable. Slice 5 adds bounded filter context and shared analytics to that
+  derived artifact without changing raw dataset import/export semantics.
 - [`docs/comparison-export.md`](docs/comparison-export.md) documents the
-  additive analysis-v1 configuration dimensions and their identity-key versus
-  presentation-label semantics. Comparison export receives only revision and
-  context from the renderer; the main process derives the view from its own
-  snapshot and records the package app version.
+  additive analysis-v1 configuration, date/outcome filter, and analytics
+  dimensions, including identity-key versus presentation-label semantics.
+  Comparison export receives only revision and context from the renderer; the
+  main process derives the view from its own snapshot and records the package
+  app version.
 - `writeExport()` resolves aliases and protected identities, rejects live or
   backup destinations and unsafe filesystem identities, writes through a
   temporary file, and atomically replaces a regular destination.
@@ -223,9 +226,19 @@ The bundled seed is statically imported by `src/main/store.ts` from
   `acceptanceRuns()` includes runs starting by acceptance plus undated runs;
   `timeToAccepted()` uses an operator measurement or first recorded run start;
   `groupRuns()` supports derived `modelConfiguration`, `canonicalModel`, and
-  recorded `modelFamily` dimensions in addition to model, thinking, role,
-  slice, candidate, workflow, session/context, local hour, and weekday
-  groupings.
+  `modelFamily` dimensions, plus recorded provider/provider ID, saved offer ID,
+  stage, runtime-tested, result, project, ambiguity, risk, disposition, and
+  quality-grade dimensions in addition to model, thinking, role, slice,
+  candidate, workflow, session/context, local hour, and weekday groupings.
+  Missing recorded values use bounded keyed identities and remain distinct from
+  literal source text such as `Unknown`.
+- [`src/shared/analytics.ts`](src/shared/analytics.ts) is the shared
+  descriptive-analytics layer. `distribution()` reports mean, median, min,
+  max, sample standard deviation, and known/unknown coverage; `runAnalytics()`
+  adds cost composition, wall-time, reasoning-share, and source run IDs;
+  `temporalAnalytics()` groups recorded run starts by UTC calendar day and
+  retains undated IDs and paired time/cost points. These results are consumed by
+  both the Compare UI and comparison export.
 - [`src/shared/configuration.ts`](src/shared/configuration.ts) owns the shared
   derived comparison identity path. `modelIdentity()` uses a valid recorded
   registry model ID first, otherwise the existing evidence-based
@@ -248,12 +261,16 @@ The bundled seed is statically imported by `src/main/store.ts` from
   `runFilterIdentity()`/`runFilterOptions()` share the configuration derivation
   and keyed presentation options with the renderer; `selectCohort()` compares
   derived filter keys as well as source fields;
-  when any run filter is active, one run must satisfy all active run filters for
-  a slice to qualify, but qualifying accepted slices retain their full
-  acceptance lifecycle across models and roles;
-  `compareData()` derives group summaries, candidate columns, coverage-aware
-  evidence, findings, validated discoveries, quality distributions, selected
-  evidence, and accepted economics using the same keys and labels;
+  `ComparisonContext` additionally carries bounded UTC run-start `dateRange`
+  and accepted-outcome `outcomeFilters`; recorded filters include provider,
+  saved offer ID, runtime-tested, and result alongside the existing source and
+  derived dimensions. `selectCohort()` applies all active run conditions to the
+  same run and keeps accepted-outcome qualification separate from lifecycle
+  reopening;
+  `compareDataBase()` derives group summaries, analytics, temporal data,
+  accepted aggregates, coverage-aware evidence, findings, validated
+  discoveries, and accepted economics; `applyComparisonSelection()` then adds
+  ephemeral candidate/group selection for the full `compareData()` view;
   `selectedCandidates` is a separate bounded collection of canonical Model
   Configuration keys, independent of ordinary filters and `selectedGroup`;
   `stageScopes` match exact recorded structured roles (`Implementer`, `Critic`,
@@ -261,11 +278,15 @@ The bundled seed is statically imported by `src/main/store.ts` from
   combined with ordinary filters on the same run;
   `modelConfiguration` is the default Compare grouping while `canonicalModel`,
   `modelFamily`, existing exact `model`, and `thinking` preserve useful rollups;
-  `validateComparisonRequest()` admits the derived dimensions and bounds their
-  encoded selections/filters separately, including limits of eight candidates
-  and sixteen stage scopes; `comparisonExport()` derives the same view in the
-  main process from current authoritative dataset state after checking the
-  request revision and emits a reproducible non-importable analysis object.
+  `acceptedAnalytics()` counts each accepted slice once, groups exact recorded
+  role/runType stages, preserves complete-versus-partial outcome coverage, and
+  keeps known full-lifecycle cost separate from complete per-outcome
+  distributions; `validateComparisonRequest()` bounds the date/outcome and
+  recorded/derived filter state plus limits of eight candidates and sixteen
+  stage scopes; `comparisonExport()` derives the same analytics, temporal, and
+  accepted-aggregate view in the main process from current authoritative
+  dataset state after checking the request revision and emits a reproducible
+  non-importable analysis object.
 - Defect counts exclude dismissed findings and observations but preserve
   repaired defects. Findings attribute discovery to a linked run, not blame to
   a model. Validated autonomous discovery requires
@@ -278,6 +299,11 @@ The bundled seed is statically imported by `src/main/store.ts` from
   categorical evidence. Unknown, known zero, partial, and empty measurements
   remain distinguishable in both UI and analysis JSON. Reasoning tokens remain
   a subset of output and are not separately billed.
+- Analytics remains descriptive evidence: distributions use known measurements,
+  cost composition uses the fully priced subset, date trends use recorded UTC
+  starts without zero-filling missing days, and quality/cost points require
+  paired recorded evidence. No confidence, causal, or combined-winner score is
+  derived.
 - `acceptedEconomics()` derives Slice 4 accepted-outcome evidence while
   preserving full-lifecycle behavior: cohort filters and stage scopes qualify
   a slice, then economics reopen its full relevant same-slice lifecycle.
@@ -299,7 +325,12 @@ The bundled seed is statically imported by `src/main/store.ts` from
   owns comparison view controls: group-by, sort, cohort filters, separate
   multi-candidate Model Configuration selection, exact stage scopes, group
   selection, side-by-side observed-run evidence, accepted-outcome economics,
-  and comparison export. Accepted outcomes expose summary rows plus expandable
+  date-range and accepted-outcome filters, and comparison export. It computes a
+  shared base view before applying ephemeral candidate/group selection.
+  [`src/renderer/src/components/AnalyticsWorkspace.tsx`](src/renderer/src/components/AnalyticsWorkspace.tsx)
+  renders the shared descriptive statistics, cost composition, time/reasoning
+  bars, source-linked SVG scatter plots, UTC cost trend, accepted aggregates,
+  lifecycle stage composition, and quality/cost points. Accepted outcomes expose summary rows plus expandable
   lifecycle stages, token/reasoning evidence, runtime coverage, repair evidence,
   and source runs. It defaults to Model Configuration and uses shared keyed
   options so collision-safe labels remain stable through filtering and export.
@@ -319,8 +350,9 @@ The bundled seed is statically imported by `src/main/store.ts` from
 - [`src/renderer/src/components/ui.tsx`](src/renderer/src/components/ui.tsx)
   contains common empty states, badges, metrics, modal, record details, and
   run metrics presentation. [`src/renderer/src/assets/main.css`](src/renderer/src/assets/main.css)
-  defines the fixed sidebar/workspace layout, tables, forms, responsive rules,
-  dialogs, status styles, and narrow-window behavior.
+  defines the fixed sidebar/workspace layout, analytics grid/bar/scatter styles,
+  tables, forms, responsive rules, dialogs, status styles, and narrow-window
+  behavior. Analytics uses React/CSS/SVG; no charting dependency was added.
 - [`src/renderer/src/pages/Pricing.tsx`](src/renderer/src/pages/Pricing.tsx),
   [`src/renderer/src/pages/Registry.tsx`](src/renderer/src/pages/Registry.tsx),
   and [`src/renderer/src/pages/Data.tsx`](src/renderer/src/pages/Data.tsx) are
@@ -329,7 +361,7 @@ The bundled seed is statically imported by `src/main/store.ts` from
 - [`src/renderer/src/App.tsx`](src/renderer/src/App.tsx) and the main-process
   package metadata share the `package.json` version source; the sidebar/header
   display and `comparisonExport()` app metadata therefore remain aligned at
-  version `0.1.3` for the accepted Slice 4 product candidate.
+  version `0.1.4` for the accepted Slice 5 product candidate.
 
 ## Tests by architectural area
 
@@ -345,8 +377,9 @@ under `tests/**/*.test.{ts,tsx}`.
 | Filesystem-safe export | [`tests/export.test.ts`](tests/export.test.ts) | Regular destinations, live/backup aliases, links, dangling/unresolvable identities, raw and comparison output |
 | Configuration identity and comparison | [`tests/configuration.test.ts`](tests/configuration.test.ts), [`tests/configuration-fixtures.ts`](tests/configuration-fixtures.ts), [`tests/comparison.test.ts`](tests/comparison.test.ts) | Canonical/alias identity, recorded thinking and Unknown behavior, ExtraHigh/XHigh presentation, collision-safe labels and bounded derived requests, multi-candidate/stage selection, grouping/filtering/export, raw import and historical cost/snapshot stability |
 | Comparison calculations/export | [`tests/comparison.test.ts`](tests/comparison.test.ts) | Cohort qualification, ORed stage scopes, full lifecycle retention, source and derived filters/grouping/order/selection, candidate evidence coverage, quality, unknown/zero/partial measurements, stale/untrusted export requests |
+| Descriptive analytics | [`tests/analytics.test.ts`](tests/analytics.test.ts) | Known/unknown distributions, median/spread, cost-component reconciliation, reasoning share, UTC temporal grouping, date/provider/offer/runtime/outcome filters, accepted aggregate coverage, source IDs, and non-importable export stability |
 | Accepted-outcome economics | [`tests/accepted-outcome.test.ts`](tests/accepted-outcome.test.ts), [`tests/accepted-outcome-fixture.json`](tests/accepted-outcome-fixture.json) | Multi-stage/cross-model lifecycle economics, first-pass Yes/No/Unknown, repair-link deduplication, partial/zero evidence, frozen pricing, reasoning coverage, export and raw-data stability |
-| Renderer comparison | [`tests/compare-ui.test.tsx`](tests/compare-ui.test.tsx) | Shared cohort context, 2+/3+ configuration selection, exact stage controls, collision labels, keyed export payload, export failure state, canonical version display across pages |
+| Renderer comparison and analytics | [`tests/compare-ui.test.tsx`](tests/compare-ui.test.tsx), [`tests/analytics-ui.test.tsx`](tests/analytics-ui.test.tsx) | Shared cohort context, 2+/3+ configuration selection, exact stage controls, date/outcome/Unknown filters, collision labels, keyed export payload, source-linked charts, export failure state, canonical version display across pages |
 | Renderer editors/startup | [`tests/editor.test.tsx`](tests/editor.test.tsx) | Acceptance editing, local/exact timestamps, drafts, failed saves, unknown booleans, discard, same-slice relationship choices, startup failure |
 | Renderer registry | [`tests/registry-ui.test.tsx`](tests/registry-ui.test.tsx) | Metadata/benchmark display, invalid-update rejection, editable failed draft, preview/install handoff |
 
@@ -377,7 +410,8 @@ scripts exercise the real main/preload/renderer/filesystem path.
   [`scripts/electron-new-profile-qa.mjs`](scripts/electron-new-profile-qa.mjs),
   [`scripts/electron-registry-qa.mjs`](scripts/electron-registry-qa.mjs),
   [`scripts/electron-configuration-qa.mjs`](scripts/electron-configuration-qa.mjs),
-  and [`scripts/electron-accepted-outcome-qa.mjs`](scripts/electron-accepted-outcome-qa.mjs).
+  and [`scripts/electron-accepted-outcome-qa.mjs`](scripts/electron-accepted-outcome-qa.mjs),
+  which invokes [`scripts/electron-analytics-qa.mjs`](scripts/electron-analytics-qa.mjs).
   They use Playwright's Electron driver, isolated temporary
   `test-results/electron-qa-*`/repair/new-profile/registry/configuration-runtime-*
   profiles, real IPC,
@@ -393,7 +427,14 @@ scripts exercise the real main/preload/renderer/filesystem path.
   against an isolated synthetic profile, proving accepted-outcome summaries,
   six-stage cross-model lifecycle retention, first-pass states, known zero
   versus Unknown, stage/source-run inspection, export, restart/raw-data
-  stability, and narrow-window horizontal-scroll behavior.
+  stability, narrow-window horizontal-scroll behavior, and the nested analytics
+  verification path.
+- `electron-analytics-qa.mjs` is the Slice 5 runtime analytics helper. Against
+  that isolated profile it verifies descriptive distributions and coverage,
+  source-linked charts, UTC date trends, missing-versus-literal-Unknown
+  filtering, provider/offer/runtime/stage/outcome filters, full accepted
+  lifecycle retention, authoritative export, and 900px layout behavior. The
+  enclosing accepted-outcome QA retains the raw-data/restart stability checks.
 - Fresh Codex worker sandboxes are known to deny ordinary Electron launch
   before PennyTel startup. For Electron QA in this worker environment, use the
   configured approved/elevated execution path first rather than attempting the
@@ -436,6 +477,11 @@ scripts exercise the real main/preload/renderer/filesystem path.
   identity; role-backed stage scopes and exact recorded `runType` scopes remain
   separate evidence types, and absent/unrecognized stage evidence stays
   unknown rather than inferred.
+- Analytics and filters are derived from the current validated dataset snapshot;
+  date bounds qualify a matching run by inclusive UTC `startAt`, while accepted
+  outcome analytics reopen the full relevant lifecycle. Null explicitly selects
+  missing evidence, empty filter values mean cleared state, and literal
+  recorded `Unknown` remains ordinary source text.
 - Raw dataset export is canonical/importable; comparison export is derived and
   explicitly non-importable. Export destinations may not alias live/backup
   storage.
@@ -462,6 +508,16 @@ scripts exercise the real main/preload/renderer/filesystem path.
   analytical ownership. Do not duplicate model/thinking identity composition
   in the renderer or persist a redundant configuration field without an
   authoritative schema change.
+- New descriptive metrics belong in `src/shared/analytics.ts` or the shared
+  comparison/metrics layer, then in `ComparisonView`/`ComparisonAnalysis` so
+  UI and main-process export share the same calculations, coverage, and source
+  IDs. New filters must extend the shared labels/types, request validation,
+  `selectCohort()`, and renderer context together; do not filter accepted
+  lifecycle stages after cohort qualification.
+- New analytics visuals should extend `AnalyticsWorkspace.tsx` and the shared
+  CSS/SVG patterns, retain source-inspection callbacks and Unknown/partial
+  states, and add deterministic unit/UI/runtime coverage rather than creating a
+  renderer-only calculation or chart subsystem.
 - New pages should be routed in `App.tsx` and consume the loaded `Dataset`
   through existing callbacks; persistence authority should not move into page
   components.
