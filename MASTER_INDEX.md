@@ -1,7 +1,7 @@
 # PennyTel repository map
 
-Evidence-based map of the repository at accepted PennyTel `0.2.0` product
-candidate `3a68d1d19e631711dd99b1d6fdd221021629d476`. This
+Evidence-based map of the repository at accepted PennyTel `0.2.1` product
+candidate `8589e444486389c1fe44d6691fd4467f62cb2ee7`. This
 is a navigation aid for future slices, not a replacement for the assigned
 GitHub Issue or the authoritative contracts in `docs/`.
 
@@ -15,6 +15,7 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - Accepted Slice 4 context map: [`docs/context-maps/Slice_4_Accepted_Outcome_Economics_Context_Map.md`](docs/context-maps/Slice_4_Accepted_Outcome_Economics_Context_Map.md)
 - Slice 5 comparison analytics/filtering context map: [`docs/context-maps/Slice_5_Comparison_Analytics_and_Filters_Context_Map.md`](docs/context-maps/Slice_5_Comparison_Analytics_and_Filters_Context_Map.md)
 - Slice 6 telemetry evidence context map: [`docs/context-maps/Slice_6_Telemetry_Evidence_Contract_Context_Map.md`](docs/context-maps/Slice_6_Telemetry_Evidence_Contract_Context_Map.md)
+- Slice 7 telemetry evidence surfaces/analysis context map: [`docs/context-maps/Slice_7_Telemetry_Evidence_Surfaces_and_Analysis_Context_Map.md`](docs/context-maps/Slice_7_Telemetry_Evidence_Surfaces_and_Analysis_Context_Map.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
 - Canonical registry input: [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json)
 - Runtime/verification record: [`docs/verification.md`](docs/verification.md) and [`docs/bounded-repair-verification.md`](docs/bounded-repair-verification.md)
@@ -265,17 +266,21 @@ The bundled seed is statically imported by `src/main/store.ts` from
   `groupRuns()` supports derived `modelConfiguration`, `canonicalModel`, and
   `modelFamily` dimensions, plus recorded provider/provider ID, saved offer ID,
   stage, runtime-tested, result, project, ambiguity, risk, disposition, and
-  quality-grade dimensions in addition to model, thinking, role, slice,
-  candidate, workflow, session/context, local hour, and weekday groupings.
-  Missing recorded values use bounded keyed identities and remain distinct from
-  literal source text such as `Unknown`.
+  quality-grade dimensions, exact nested `evidenceSourceKind` and
+  `runtimeVersion`, in addition to model, thinking, role, slice, candidate,
+  workflow, session/context, local hour, and weekday groupings. Missing recorded
+  evidence uses bounded keyed identities and remains distinct from literal
+  source text such as `Unknown`.
 - [`src/shared/analytics.ts`](src/shared/analytics.ts) is the shared
   descriptive-analytics layer. `distribution()` reports mean, median, min,
   max, sample standard deviation, and known/unknown coverage; `runAnalytics()`
   adds cost composition, wall-time, reasoning-share, and source run IDs;
-  `temporalAnalytics()` groups recorded run starts by UTC calendar day and
-  retains undated IDs and paired time/cost points. These results are consumed by
-  both the Compare UI and comparison export.
+  `executionEvidenceAnalytics()` adds independent source-kind attachment and
+  runtime-version coverage plus TTFT, model-invocation, tool-call, peak-input,
+  and paired peak-context-utilization distributions; `temporalAnalytics()`
+  groups recorded run starts by UTC calendar day and retains undated IDs and
+  paired time/cost points. These results are consumed by both the Compare UI,
+  ordinary comparison export, and comparison-plan results.
 - [`src/shared/configuration.ts`](src/shared/configuration.ts) owns the shared
   derived comparison identity path. `modelIdentity()` uses a valid recorded
   registry model ID first, otherwise the existing evidence-based
@@ -300,10 +305,10 @@ The bundled seed is statically imported by `src/main/store.ts` from
   derived filter keys as well as source fields;
   `ComparisonContext` additionally carries bounded UTC run-start `dateRange`
   and accepted-outcome `outcomeFilters`; recorded filters include provider,
-  saved offer ID, runtime-tested, and result alongside the existing source and
-  derived dimensions. `selectCohort()` applies all active run conditions to the
-  same run and keeps accepted-outcome qualification separate from lifecycle
-  reopening;
+  saved offer ID, runtime-tested, result, exact execution-evidence source kind,
+  and exact runtime/Codex version alongside the existing source and derived
+  dimensions. `selectCohort()` applies all active run conditions to the same run
+  and keeps accepted-outcome qualification separate from lifecycle reopening;
   `compareDataBase()` derives group summaries, analytics, temporal data,
   accepted aggregates, coverage-aware evidence, findings, validated
   discoveries, and accepted economics; `applyComparisonSelection()` then adds
@@ -323,7 +328,9 @@ The bundled seed is statically imported by `src/main/store.ts` from
   stage scopes; `comparisonExport()` derives the same analytics, temporal, and
   accepted-aggregate view in the main process from current authoritative
   dataset state after checking the request revision and emits a reproducible
-  non-importable analysis object.
+  non-importable analysis object. Comparison-plan execution embeds the same
+  evidence analytics, filter/group context, and conventions for each ordered
+  result, preserving ordinary-export parity.
 - Defect counts exclude dismissed findings and observations but preserve
   repaired defects. Findings attribute discovery to a linked run, not blame to
   a model. Validated autonomous discovery requires
@@ -362,15 +369,23 @@ The bundled seed is statically imported by `src/main/store.ts` from
   owns comparison view controls: group-by, sort, cohort filters, separate
   multi-candidate Model Configuration selection, exact stage scopes, group
   selection, side-by-side observed-run evidence, accepted-outcome economics,
-  date-range and accepted-outcome filters, and comparison export. It computes a
-  shared base view before applying ephemeral candidate/group selection.
+  date-range and accepted-outcome filters, evidence-source-kind and
+  runtime-version filters/groups, and comparison export. It computes a shared
+  base view before applying ephemeral candidate/group selection.
   [`src/renderer/src/components/AnalyticsWorkspace.tsx`](src/renderer/src/components/AnalyticsWorkspace.tsx)
   renders the shared descriptive statistics, cost composition, time/reasoning
   bars, source-linked SVG scatter plots, UTC cost trend, accepted aggregates,
-  lifecycle stage composition, and quality/cost points. Accepted outcomes expose summary rows plus expandable
+  lifecycle stage composition, quality/cost points, and evidence distributions
+  with independent coverage. Accepted outcomes expose summary rows plus expandable
   lifecycle stages, token/reasoning evidence, runtime coverage, repair evidence,
   and source runs. It defaults to Model Configuration and uses shared keyed
   options so collision-safe labels remain stable through filtering and export.
+- [`src/renderer/src/components/ExecutionEvidenceDetails.tsx`](src/renderer/src/components/ExecutionEvidenceDetails.tsx)
+  is the selected-run modal's read-only structured evidence surface. It renders
+  normalized provenance, session/runtime identifiers, TTFT, invocation/tool
+  counts, paired context occupancy/utilization, quota snapshots/attribution,
+  and environment constraints as inert text; absent and partial values remain
+  visibly Unknown and raw payloads are not exposed.
 - [`src/renderer/src/pages/Data.tsx`](src/renderer/src/pages/Data.tsx) shows
   the storage path, exports raw JSON, accepts pasted/file JSON, previews counts
   and skips, and commits only after the user confirms. It presents the v2
@@ -403,7 +418,7 @@ The bundled seed is statically imported by `src/main/store.ts` from
 - [`src/renderer/src/App.tsx`](src/renderer/src/App.tsx) and the main-process
   package metadata share the `package.json` version source; the sidebar/header
   display and `comparisonExport()` app metadata therefore remain aligned at
-  version `0.2.0` for the accepted schema-v2 product candidate.
+  version `0.2.1` for the accepted schema-v2 product candidate.
 
 ## Tests by architectural area
 
@@ -422,8 +437,9 @@ under `tests/**/*.test.{ts,tsx}`.
 | Comparison calculations/export | [`tests/comparison.test.ts`](tests/comparison.test.ts) | Cohort qualification, ORed stage scopes, full lifecycle retention, source and derived filters/grouping/order/selection, candidate evidence coverage, quality, unknown/zero/partial measurements, stale/untrusted export requests |
 | Comparison plan runner | [`tests/comparison-plan.test.ts`](tests/comparison-plan.test.ts), [`tests/compare-ui.test.tsx`](tests/compare-ui.test.tsx), [`tests/export.test.ts`](tests/export.test.ts) | Strict plan validation, bounded IDs/entries, ordered multi-comparison execution, shared revision/context analysis, cancellation/failure UI state, and safe derived-result export |
 | Descriptive analytics | [`tests/analytics.test.ts`](tests/analytics.test.ts) | Known/unknown distributions, median/spread, cost-component reconciliation, reasoning share, UTC temporal grouping, date/provider/offer/runtime/outcome filters, accepted aggregate coverage, source IDs, and non-importable export stability |
+| Execution-evidence analysis | [`tests/evidence-analytics.test.ts`](tests/evidence-analytics.test.ts), [`tests/evidence-ui.test.tsx`](tests/evidence-ui.test.tsx) | TTFT, invocation/tool-call, peak-input and paired-context-utilization distributions; independent attachment/runtime coverage; zero versus Unknown; quota isolation; exact evidence filters/groups; read-only detail presentation; ordinary export/plan parity and legacy-run compatibility |
 | Accepted-outcome economics | [`tests/accepted-outcome.test.ts`](tests/accepted-outcome.test.ts), [`tests/accepted-outcome-fixture.json`](tests/accepted-outcome-fixture.json) | Multi-stage/cross-model lifecycle economics, first-pass Yes/No/Unknown, repair-link deduplication, partial/zero evidence, frozen pricing, reasoning coverage, export and raw-data stability |
-| Renderer comparison and analytics | [`tests/compare-ui.test.tsx`](tests/compare-ui.test.tsx), [`tests/analytics-ui.test.tsx`](tests/analytics-ui.test.tsx) | Shared cohort context, 2+/3+ configuration selection, exact stage controls, date/outcome/Unknown filters, collision labels, keyed export payload, source-linked charts, export failure state, canonical version display across pages |
+| Renderer comparison and analytics | [`tests/compare-ui.test.tsx`](tests/compare-ui.test.tsx), [`tests/analytics-ui.test.tsx`](tests/analytics-ui.test.tsx), [`tests/evidence-ui.test.tsx`](tests/evidence-ui.test.tsx) | Shared cohort context, 2+/3+ configuration selection, exact stage controls, date/outcome/Unknown filters, evidence source/runtime filters and groups, collision labels, keyed export payload, source-linked charts, evidence detail/statistics, export failure state, canonical version display across pages |
 | Renderer editors/startup | [`tests/editor.test.tsx`](tests/editor.test.tsx) | Execution-evidence preservation/validation/clearing, acceptance editing, local/exact timestamps, drafts, failed saves, unknown booleans, discard, same-slice relationship choices, startup failure |
 | Renderer registry | [`tests/registry-ui.test.tsx`](tests/registry-ui.test.tsx) | Metadata/benchmark display, invalid-update rejection, editable failed draft, preview/install handoff |
 
@@ -485,13 +501,21 @@ scripts exercise the real main/preload/renderer/filesystem path.
   rewrite, first-mutation v2 migration with exact-byte backup, v2 raw
   export/import, additive child compatibility, run-editor evidence edits and
   clearing, strict privacy/quota validation without publication, restart
-  persistence, and malformed UTF-8 preservation/blocking.
-- `electron-analytics-qa.mjs` is the Slice 5 runtime analytics helper. Against
-  that isolated profile it verifies descriptive distributions and coverage,
+  persistence, and malformed UTF-8 preservation/blocking. It invokes the Slice 7
+  child [`scripts/electron-evidence-analysis-qa.mjs`](scripts/electron-evidence-analysis-qa.mjs),
+  which exercises a realistic evidence-bearing dataset through read-only run
+  detail, evidence distributions/coverage, exact and missing filters/groups,
+  ordinary comparison export, comparison-plan result parity, raw/live/backup
+  stability, narrow-window layout, and Electron security invariants.
+- `electron-analytics-qa.mjs` remains the general legacy analytics runtime
+  helper. Against its isolated profile it verifies descriptive distributions and coverage,
   source-linked charts, UTC date trends, missing-versus-literal-Unknown
   filtering, provider/offer/runtime/stage/outcome filters, full accepted
-  lifecycle retention, authoritative export, and 900px layout behavior. The
-  enclosing accepted-outcome QA retains the raw-data/restart stability checks.
+  lifecycle retention, authoritative export, and 900px layout behavior. It is
+  complementary to the evidence-analysis child: execution-evidence QA owns the
+  evidence-bearing detail/aggregate/export/plan-parity scenario, while the
+  accepted-outcome QA path continues to consume the general analytics helper
+  and retains the raw-data/restart stability checks.
 - Fresh Codex worker sandboxes are known to deny ordinary Electron launch
   before PennyTel startup. For Electron QA in this worker environment, use the
   configured approved/elevated execution path first rather than attempting the
@@ -524,9 +548,21 @@ scripts exercise the real main/preload/renderer/filesystem path.
   run identity or a source of PennyOS workflow labels. Session/turn IDs and
   source hashes are provenance; table record IDs remain the import/conflict
   identity. Unknown or partial evidence stays unknown, and explicit zeroes
-  remain observed zeroes.
-- Codex quota-window `usedPercent` and attribution belong only to structured
-  execution evidence. They must not be mapped to the legacy
+  remain observed zeroes. Runs without schema-v2 execution evidence remain
+  valid legacy records and participate in comparison/economics with evidence
+  fields reported as Unknown.
+- Evidence analytics has independent coverage semantics: source-kind counts are
+  attachment coverage, runtime-version coverage is separate, and every
+  TTFT/invocation/tool-call/peak-input/utilization distribution includes all
+  runs in its sample count while missing measurements remain Unknown. Literal
+  recorded `Unknown` remains distinct from missing evidence.
+- `peakInvocation` occupancy is cache-inclusive and is paired only with its own
+  positive `contextWindowTokens`; validation requires
+  `0 <= inputTokens <= contextWindowTokens` when that paired window exists.
+  Utilization is the unweighted distribution of paired per-run ratios, with no
+  fallback to the model window, registry limits, or cumulative run tokens.
+- Codex quota-window `usedPercent`, reset/plan snapshots, and attribution are
+  descriptive structured evidence only. They must not be mapped to the legacy
   `usageBefore`/`usageAfter` remaining-percent meter, `usageBurn`, pricing, or
   per-run burn analytics. Attribution is recorded explicitly and is never
   inferred from endpoint differences or timestamps.
@@ -557,7 +593,11 @@ scripts exercise the real main/preload/renderer/filesystem path.
   date bounds qualify a matching run by inclusive UTC `startAt`, while accepted
   outcome analytics reopen the full relevant lifecycle. Null explicitly selects
   missing evidence, empty filter values mean cleared state, and literal
-  recorded `Unknown` remains ordinary source text.
+  recorded `Unknown` remains ordinary source text. Evidence source kind and
+  runtime version use exact nested recorded values; null filters and recorded
+  null group keys select missing evidence without inference from model,
+  environment, filename, or provenance. Evidence filters qualify a cohort run,
+  while accepted-outcome economics reopens the full relevant lifecycle.
 - Raw dataset export is canonical/importable; comparison export is derived and
   explicitly non-importable. Export destinations may not alias live/backup
   storage.
