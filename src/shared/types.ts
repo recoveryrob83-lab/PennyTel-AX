@@ -206,4 +206,5 @@ export interface PennyTelAPI {
   openImport: () => Promise<string | null>
   exportData: () => Promise<string | null>
   exportComparison: (request: ComparisonRequest) => Promise<string | null>
+  runComparisonPlan: () => Promise<string | null>
 }

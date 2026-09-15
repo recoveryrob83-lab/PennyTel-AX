@@ -234,7 +234,8 @@ describe('comparison UI uses shared cohort context', () => {
       previewImport: vi.fn(),
       openImport: vi.fn(),
       exportData: vi.fn(),
-      exportComparison
+      exportComparison,
+      runComparisonPlan: vi.fn()
     }
     render(<Compare data={data} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
     expect(screen.getByLabelText('Group runs by')).toHaveValue('modelConfiguration')
@@ -273,7 +274,7 @@ describe('comparison UI uses shared cohort context', () => {
   })
 
   it('keeps the canonical package version visible across ordinary pages', async () => {
-    expect(version).toBe('0.1.4')
+    expect(version).toBe('0.1.5')
     const user = userEvent.setup()
     window.pennytel = {
       load: vi.fn().mockResolvedValue({ data: configurationFixture(), path: '/qa/telemetry.json' }),
@@ -281,7 +282,8 @@ describe('comparison UI uses shared cohort context', () => {
       previewImport: vi.fn(),
       openImport: vi.fn(),
       exportData: vi.fn(),
-      exportComparison: vi.fn()
+      exportComparison: vi.fn(),
+      runComparisonPlan: vi.fn()
     }
     render(<App />)
     const nav = await screen.findByRole('navigation')
@@ -299,7 +301,8 @@ describe('comparison UI uses shared cohort context', () => {
       previewImport: vi.fn(),
       openImport: vi.fn(),
       exportData: vi.fn(),
-      exportComparison
+      exportComparison,
+      runComparisonPlan: vi.fn()
     }
     render(<Compare data={comparisonFixture()} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
     const accepted = within(
@@ -339,12 +342,42 @@ describe('comparison UI uses shared cohort context', () => {
       previewImport: vi.fn(),
       openImport: vi.fn(),
       exportData: vi.fn(),
-      exportComparison: vi.fn().mockRejectedValue(new Error('Could not save analysis'))
+      exportComparison: vi.fn().mockRejectedValue(new Error('Could not save analysis')),
+      runComparisonPlan: vi.fn()
     }
     render(<Compare data={comparisonFixture()} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
     await user.click(screen.getByRole('button', { name: 'Export comparison' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not save analysis')
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Accepted slice economics' })).toBeVisible()
+  })
+  it('runs a plan without changing the current comparison controls and reports success or failure', async () => {
+    const user = userEvent.setup()
+    const runComparisonPlan = vi.fn().mockResolvedValue('/qa/plan-results.json')
+    window.pennytel = {
+      load: vi.fn(),
+      mutate: vi.fn(),
+      previewImport: vi.fn(),
+      openImport: vi.fn(),
+      exportData: vi.fn(),
+      exportComparison: vi.fn(),
+      runComparisonPlan
+    }
+    render(<Compare data={comparisonFixture()} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
+    await user.click(screen.getByText('Narrow the cohort'))
+    await user.selectOptions(screen.getByLabelText('Filter Exact model'), 'QA Astra')
+    await user.selectOptions(screen.getByLabelText('Group runs by'), 'role')
+    await user.click(screen.getByRole('checkbox', { name: 'Repair (role: Repair)' }))
+    await user.click(screen.getByRole('button', { name: 'Run comparison plan' }))
+    expect(runComparisonPlan).toHaveBeenCalledWith()
+    expect(await screen.findByRole('status')).toHaveTextContent('/qa/plan-results.json')
+    expect(screen.getByLabelText('Filter Exact model')).toHaveValue('QA Astra')
+    expect(screen.getByLabelText('Group runs by')).toHaveValue('role')
+    expect(screen.getByRole('checkbox', { name: 'Repair (role: Repair)' })).toBeChecked()
+
+    runComparisonPlan.mockRejectedValueOnce(new Error('Comparison 2 is invalid'))
+    await user.click(screen.getByRole('button', { name: 'Run comparison plan' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Comparison 2 is invalid')
+    expect(screen.getByLabelText('Filter Exact model')).toHaveValue('QA Astra')
   })
 })

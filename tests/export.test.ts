@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { writeExport } from '../src/main/export'
 import { emptyDataset } from '../src/shared/types'
 import { comparisonExport } from '../src/shared/comparison'
+import { executeComparisonPlan } from '../src/shared/comparison-plan'
 
 describe('filesystem-safe exports', () => {
   beforeAll(async () => {
@@ -16,9 +17,27 @@ describe('filesystem-safe exports', () => {
     '0.1.0',
     new Date().toISOString()
   )
+  const planResults = executeComparisonPlan(
+    raw,
+    {
+      kind: 'pennytel-comparison-plan',
+      planVersion: 1,
+      name: 'Safe export test',
+      comparisons: [
+        {
+          id: 'all-models',
+          name: 'All models',
+          context: { filters: {}, groupBy: 'model', sort: 'label' }
+        }
+      ]
+    },
+    '0.1.5',
+    new Date().toISOString()
+  )
   for (const [kind, contents] of [
     ['raw', raw],
-    ['comparison', analysis]
+    ['comparison', analysis],
+    ['comparison-plan-results', planResults]
   ] as const) {
     it.each(['direct', 'symlink', 'hardlink', 'parent-link'])(
       `${kind} rejects %s aliases of both protected files`,

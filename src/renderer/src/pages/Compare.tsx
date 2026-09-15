@@ -56,6 +56,7 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
   const [exportBusy, setExportBusy] = useState(false)
   const [exportError, setExportError] = useState('')
   const [exportMessage, setExportMessage] = useState('')
+  const [planBusy, setPlanBusy] = useState(false)
   const dateError = !!(dateFrom && dateTo && dateFrom > dateTo)
   const baseContext: ComparisonContext = useMemo(
     () => ({
@@ -119,6 +120,19 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
       setExportBusy(false)
     }
   }
+  const runComparisonPlan = async (): Promise<void> => {
+    setPlanBusy(true)
+    setExportError('')
+    setExportMessage('')
+    try {
+      const path = await window.pennytel.runComparisonPlan()
+      if (path) setExportMessage(`Comparison-plan results saved to ${path}.`)
+    } catch (e) {
+      setExportError((e as Error).message)
+    } finally {
+      setPlanBusy(false)
+    }
+  }
   const knownMax = Math.max(...groups.map((g) => g.stats.cost), 0)
   const candidateOptions = useMemo(() => {
     const options = runFilterOptions(data, 'modelConfiguration')
@@ -169,8 +183,15 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
           <span className="count-tag">
             {runs.length} runs · {slices.length} slices
           </span>
-          <button className="primary" disabled={exportBusy || dateError} onClick={exportComparison}>
+          <button
+            className="primary"
+            disabled={exportBusy || planBusy || dateError}
+            onClick={exportComparison}
+          >
             {exportBusy ? 'Exporting…' : 'Export comparison'}
+          </button>
+          <button disabled={planBusy || exportBusy} onClick={runComparisonPlan}>
+            {planBusy ? 'Running plan…' : 'Run comparison plan'}
           </button>
         </div>
       </div>

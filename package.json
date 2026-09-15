@@ -1,6 +1,6 @@
 {
   "name": "pennytel",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Local PennyOS Engineering telemetry workbench",
   "main": "./out/main/index.js",
   "author": "PennyOS Engineering",
@@ -20,7 +20,7 @@
     "build:mac": "electron-vite build && electron-builder --mac",
     "build:linux": "electron-vite build && electron-builder --linux",
     "test": "vitest run",
-    "test:electron": "npm run build && node scripts/electron-smoke.mjs && node scripts/electron-repair-qa.mjs && node scripts/electron-new-profile-qa.mjs && node scripts/electron-registry-qa.mjs && node scripts/electron-configuration-qa.mjs && node scripts/electron-accepted-outcome-qa.mjs",
+    "test:electron": "npm run build && node scripts/electron-smoke.mjs && node scripts/electron-repair-qa.mjs && node scripts/electron-new-profile-qa.mjs && node scripts/electron-registry-qa.mjs && node scripts/electron-configuration-qa.mjs && node scripts/electron-accepted-outcome-qa.mjs && node scripts/electron-comparison-plan-qa.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {

@@ -7,6 +7,7 @@ import { writeExport } from './export'
 import type { Mutation } from '../shared/types'
 import { comparisonExport, validateComparisonRequest } from '../shared/comparison'
 import { version as appVersion } from '../../package.json'
+import { runComparisonPlanOperation } from './comparison-plan'
 
 // A dedicated directory keeps local QA separate from the operator's dataset.
 if (process.env.PENNYTEL_DATA_DIR) app.setPath('userData', resolve(process.env.PENNYTEL_DATA_DIR))
@@ -79,6 +80,27 @@ else {
         analysis
       )
     })
+    handle('telemetry:run-comparison-plan', () =>
+      runComparisonPlanOperation(
+        {
+          choosePlan: async () => {
+            const result = await dialog.showOpenDialog(mainWindow, {
+              title: 'Run PennyTel comparison plan',
+              properties: ['openFile'],
+              filters: [{ name: 'PennyTel comparison plan', extensions: ['json'] }]
+            })
+            if (result.canceled || !result.filePaths[0]) return null
+            if ((await stat(result.filePaths[0])).size > 10_000_000)
+              throw new Error('Comparison plan exceeds the 10 MB limit.')
+            return readFile(result.filePaths[0], 'utf8')
+          },
+          loadDataset: async () => (await store.load()).data,
+          saveResults: (results, defaultPath) =>
+            saveExport('Export PennyTel comparison-plan results', defaultPath, results)
+        },
+        appVersion
+      )
+    )
     async function saveExport(
       title: string,
       defaultPath: string,

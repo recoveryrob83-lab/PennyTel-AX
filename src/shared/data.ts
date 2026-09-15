@@ -348,6 +348,10 @@ export function mergeImport(
     fail(
       'Comparison exports are derived analysis, not importable telemetry. Select an Export dataset JSON file instead.'
     )
+  if (object(input) && input.kind === 'pennytel-comparison-plan')
+    fail('Comparison plans are executable analysis requests. Use Run comparison plan.')
+  if (object(input) && input.kind === 'pennytel-comparison-plan-results')
+    fail('Comparison-plan results are derived analysis and cannot be imported as telemetry.')
   if (!object(input) || input.schemaVersion !== 1) fail('Import requires schemaVersion: 1.')
   const incoming = { ...emptyDataset(), ...input, revision: 0 }
   // Check each record first, then relationships against the combined dataset.

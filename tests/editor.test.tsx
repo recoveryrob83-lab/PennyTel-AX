@@ -192,7 +192,8 @@ describe('record editor behavior', () => {
       previewImport: vi.fn(),
       openImport: vi.fn(),
       exportData: vi.fn(),
-      exportComparison: vi.fn()
+      exportComparison: vi.fn(),
+      runComparisonPlan: vi.fn()
     }
     render(<App />)
     expect(await screen.findByRole('alert')).toHaveTextContent('Dataset corrupt: preserved')

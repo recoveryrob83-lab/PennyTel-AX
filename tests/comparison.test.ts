@@ -188,7 +188,7 @@ describe('real comparison workspace', () => {
       'not importable telemetry'
     )
     expect(mergeImport(emptyDataset(), bytes).data.runs).toEqual(data.runs)
-    expect(output.app.version).toBe('0.1.4')
+    expect(output.app.version).toBe('0.1.5')
   })
   it('keeps empty candidates and partially priced/timed/cache/meter measurements honest', () => {
     const data = configurationFixture()
