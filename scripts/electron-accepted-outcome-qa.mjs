@@ -130,7 +130,7 @@ try {
   await page.getByRole('button', { name: 'Export comparison', exact: true }).click()
   await page.getByRole('status').filter({ hasText: exportPath }).waitFor()
   const analysis = JSON.parse(await readFile(exportPath, 'utf8'))
-  assert.equal(analysis.app.version, '0.2.0')
+  assert.equal(analysis.app.version, '0.2.1')
   assert.deepEqual(analysis.context.filters, { modelConfiguration: astraKey })
   assert.deepEqual(analysis.context.selectedCandidates, [astraKey])
   assert.deepEqual(analysis.context.stageScopes, [{ kind: 'role', value: 'Implementer' }])

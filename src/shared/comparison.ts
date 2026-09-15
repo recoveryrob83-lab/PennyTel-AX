@@ -1032,6 +1032,12 @@ export function comparisonExport(
       discoveryIds: a.discoveries.map((d) => d.id)
     })),
     conventions: {
+      executionEvidence:
+        'analytics.executionEvidence distributions use one recorded measurement per run, including zero. sourceKinds recorded/total is execution-evidence attachment coverage, not completeness of its optional fields; runtimeVersions has independent coverage. All metric distributions include every run in sampleCount and count absent metrics as Unknown. No quota endpoint movement enters usage-burn or cost analytics.',
+      peakContextUtilization:
+        'peakInvocation.inputTokens / peakInvocation.contextWindowTokens for the same invocation only. Input already includes cached input. No fallback to modelContextWindowTokens, registry limits, or cumulative run tokens. Aggregates describe per-run peaks; utilization is an unweighted distribution of paired run ratios, not a summed or token-weighted ratio. Paired input must be between zero and its positive context window inclusive; above-window evidence is rejected, never clamped or normalized.',
+      evidenceDimensions:
+        'evidenceSourceKind and runtimeVersion use exact recorded executionEvidence.kind/runtimeVersion, with null filters and recorded null group keys for missing values. They do not infer runtime from model, environment, source filename, or provenance.',
       inputTokens: 'Fresh / noncached input; cached input is additional.',
       outputTokens: 'Includes reasoning; reasoning is never added to cost twice.',
       cacheRatio:

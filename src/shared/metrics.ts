@@ -1,4 +1,5 @@
 import type { Dataset, Discovery, Pricing, Role, Run, Slice } from './types'
+import type { ExecutionEvidence } from './execution-evidence'
 import {
   derivedRunIdentity,
   derivedRunLabels,
@@ -80,6 +81,13 @@ export function cacheRatio(run: Run): number | null {
   if (run.inputTokens === undefined || run.cachedInputTokens === undefined) return null
   const total = run.inputTokens + run.cachedInputTokens
   return total > 0 ? run.cachedInputTokens / total : null
+}
+/** Cache-inclusive occupancy paired with the window of that same invocation. */
+export function peakContextUtilization(evidence?: ExecutionEvidence): number | null {
+  const peak = evidence?.peakInvocation
+  return peak?.contextWindowTokens !== undefined
+    ? peak.inputTokens / peak.contextWindowTokens
+    : null
 }
 export function validatedDiscovery(discovery: Discovery): boolean {
   return (
@@ -258,6 +266,8 @@ export type GroupBy =
   | keyof typeof recordedRunLabels
   | keyof typeof recordedSliceLabels
 export const recordedRunLabels = {
+  evidenceSourceKind: 'Evidence source kind',
+  runtimeVersion: 'Runtime / Codex version',
   provider: 'Recorded provider',
   providerId: 'Recorded provider ID',
   offerId: 'Saved offer ID',
@@ -278,7 +288,14 @@ export function recordedRunValue(
   run: Run,
   key: keyof typeof recordedRunLabels
 ): string | undefined {
-  const value = key === 'offerId' ? run.priceSnapshot?.offerId : run[key]
+  const value =
+    key === 'evidenceSourceKind'
+      ? run.executionEvidence?.kind
+      : key === 'runtimeVersion'
+        ? run.executionEvidence?.runtimeVersion
+        : key === 'offerId'
+          ? run.priceSnapshot?.offerId
+          : run[key]
   return value === undefined || value === '' ? undefined : String(value)
 }
 export const groupLabels: Record<GroupBy, string> = {

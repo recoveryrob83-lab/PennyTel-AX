@@ -297,7 +297,7 @@ try {
   assert.equal(all.candidates[0].metrics.evidence.numeric.filesChanged.knownTotal, 0)
   assert.equal(all.candidates[0].metrics.usageBurnPercentagePoints.recorded, 1)
   assert.equal(all.candidates[4].metrics.costUSD.knownTotal, null)
-  assert.equal(all.app.version, '0.2.0')
+  assert.equal(all.app.version, '0.2.1')
   await candidate('Implementation (role: Implementer)').check()
   await candidate('Recorded run type: Verification').check()
   const workspacePath = join(directory, 'workspace-scoped.json')

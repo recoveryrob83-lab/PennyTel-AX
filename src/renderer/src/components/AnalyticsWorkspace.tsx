@@ -3,6 +3,7 @@ import type { ComparisonView } from '../../../shared/comparison'
 import type { Distribution } from '../../../shared/analytics'
 import type { Run } from '../../../shared/types'
 import { duration, money, percent, type MeasuredTotal } from '../../../shared/metrics'
+import { evidenceNumber, evidencePercent } from '../../../shared/presentation'
 
 type Props = {
   view: ComparisonView
@@ -228,6 +229,92 @@ export const AnalyticsWorkspace = memo(
             </tbody>
           </table>
         </div>
+        <section aria-label="Execution evidence analytics">
+          <h3>Execution evidence analytics</h3>
+          <p className="muted">
+            One sample per run. Distributions use only known measurements, including recorded zero.
+            Source-kind coverage counts evidence attachments; each metric has independent coverage.
+            Peak input includes cache. Utilization uses the paired window at that invocation;
+            unpaired windows remain Unknown. Quota snapshots do not enter these aggregates.
+          </p>
+          <div
+            className="table-wrap execution-evidence-statistics"
+            role="region"
+            aria-label="Execution evidence statistics"
+            tabIndex={0}
+          >
+            <table>
+              <caption>Recorded execution evidence · per-run distributions</caption>
+              <thead>
+                <tr>
+                  <th>Scope / evidence coverage</th>
+                  <th>TTFT (ms)</th>
+                  <th>Model invocations</th>
+                  <th>Tool calls</th>
+                  <th>Peak input (tokens)</th>
+                  <th>Peak context utilization</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[{ key: '', label: 'All matching runs', analytics }, ...groups].map((group) => {
+                  const e = group.analytics.executionEvidence
+                  return (
+                    <tr key={group.key}>
+                      <th>
+                        {group.key ? (
+                          <button
+                            className="record-link"
+                            aria-label={`Inspect execution evidence group ${group.label}`}
+                            onClick={() => onSelectGroup(group.key)}
+                          >
+                            {group.label}
+                          </button>
+                        ) : (
+                          group.label
+                        )}
+                        <small>
+                          {e.sourceKinds.recorded}/{e.sourceKinds.total} with execution evidence ·{' '}
+                          {e.sourceKinds.total - e.sourceKinds.recorded} Unknown
+                        </small>
+                        <small>
+                          Sources:{' '}
+                          {e.sourceKinds.counts.map((c) => `${c.value}: ${c.count}`).join(' · ') ||
+                            'Unknown'}
+                        </small>
+                        <small>
+                          Runtime versions:{' '}
+                          {e.runtimeVersions.counts
+                            .map((c) => `${c.value}: ${c.count}`)
+                            .join(' · ') || 'Unknown'}{' '}
+                          · {e.runtimeVersions.recorded}/{e.runtimeVersions.total} recorded
+                        </small>
+                      </th>
+                      <td>
+                        <Statistics value={e.timeToFirstTokenMs} format={evidenceNumber} />
+                      </td>
+                      <td>
+                        <Statistics value={e.modelInvocationCount} format={evidenceNumber} />
+                      </td>
+                      <td>
+                        <Statistics value={e.toolCallCount} format={evidenceNumber} />
+                      </td>
+                      <td>
+                        <Statistics value={e.peakInputTokens} format={evidenceNumber} />
+                      </td>
+                      <td>
+                        <Statistics value={e.peakContextUtilization} format={evidencePercent} />
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="footnote">
+            Utilization statistics describe per-run peak ratios, not a pooled percentage. Occupancy
+            is not cumulative token usage. Inspect a group to open its source runs below.
+          </p>
+        </section>
         <div className="analytics-grid">
           <section className="analytics-chart" aria-label="Cost composition">
             <h3>Cost composition by current group</h3>

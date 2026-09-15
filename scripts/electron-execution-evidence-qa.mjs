@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { captureElectron } from './electron-qa-capture.mjs'
+import { verifyEvidenceAnalysis } from './electron-evidence-analysis-qa.mjs'
 
 await mkdir(resolve('test-results'), { recursive: true })
 const directory = await mkdtemp(resolve('test-results/execution-evidence-runtime-'))
@@ -143,6 +144,7 @@ try {
   const persisted = await readFile(live, 'utf8')
   const backupBytes = await readFile(backup, 'utf8')
   for (const badEvidence of [
+    { ...evidence, peakInvocation: { inputTokens: 300000, contextWindowTokens: 200000 } },
     { ...evidence, toolOutput: 'rejected synthetic payload' },
     { ...evidence, environment: { ...evidence.environment, raw: 'rejected' } },
     { ...evidence, quotaWindows: [{ attribution: 'Unknown', first: { usedPercent: 101 } }] }
@@ -191,6 +193,16 @@ try {
   await editor.fill(JSON.stringify({ ...evidence, prompt: 'rejected synthetic payload' }))
   await button('Save run').click()
   await page.getByRole('alert').filter({ hasText: 'unknown field' }).waitFor()
+  assert.equal(await readFile(live, 'utf8'), persisted)
+  await editor.fill(
+    JSON.stringify({
+      ...evidence,
+      peakInvocation: { inputTokens: 300000, contextWindowTokens: 200000 }
+    })
+  )
+  await button('Save run').click()
+  await page.getByRole('alert').filter({ hasText: 'exceeds paired context window' }).waitFor()
+  assert.equal(JSON.parse(await editor.inputValue()).peakInvocation.inputTokens, 300000)
   assert.equal(await readFile(live, 'utf8'), persisted)
   const corrected = { ...evidence, toolCallCount: 0 }
   await editor.fill(JSON.stringify(corrected, null, 2))
@@ -272,6 +284,7 @@ try {
   assert.equal(appended.data.schemaVersion, 2)
   assert.equal(appended.data.revision, 2)
   assert.deepEqual(appended.data.runs[2], v1Child.runs[0])
+  await verifyEvidenceAnalysis(application, page, roundTrip)
   assert.deepEqual(errors, [])
   console.log(
     `PASS: v2 raw export/import into another isolated profile, v1 additive child compatibility; no renderer errors. Artifacts: ${directory}, ${roundTrip}`

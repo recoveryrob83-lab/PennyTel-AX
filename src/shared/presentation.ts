@@ -23,3 +23,9 @@ export const qualityLabel = (grade: number | undefined): string =>
   grade === undefined ? 'Ungraded' : `${grade} / 5`
 export const burnLabel = (value: number | null): string =>
   value === null ? 'Unknown' : `${Number(value.toFixed(4))} pp`
+
+// Significant digits keep small positive evidence from displaying as a recorded zero.
+export const evidenceNumber = (value: number | null | undefined): string =>
+  value == null ? 'Unknown' : String(Number(value.toPrecision(6)))
+export const evidencePercent = (ratio: number | null): string =>
+  ratio === null ? 'Unknown' : `${evidenceNumber(ratio * 100)}%`

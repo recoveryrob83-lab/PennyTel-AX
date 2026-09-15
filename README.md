@@ -58,7 +58,15 @@ Export a JSON dataset through the native save dialog. Import a JSON file or past
 
 ## Authoritative schema and analysis export
 
-PennyTel 0.2.0 uses schema v2 with optional, strictly validated execution-source evidence. Valid v1 datasets load/import through deterministic normalization; loading alone does not rewrite storage, and raw export emits v2. See the [data contract](docs/data-contract.md) for exact evidence fields, migration, privacy, token/quota semantics and source-hash rules. Raw Codex logs remain external; no workflow labels are inferred from them.
+PennyTel 0.2.1 uses schema v2 with optional, strictly validated execution-source evidence. Valid v1 datasets load/import through deterministic normalization; loading alone does not rewrite storage, and raw export emits v2. See the [data contract](docs/data-contract.md) for exact evidence fields, migration, privacy, token/quota semantics and source-hash rules. Raw Codex logs remain external; no workflow labels are inferred from them.
+
+Open a run to inspect its read-only execution evidence, including provenance, TTFT,
+invocation/tool counts, paired peak context utilization, quota attribution and
+environment constraints. Compare includes coverage-aware evidence distributions
+and exact source-kind/runtime-version filters and groups. Ordinary comparison
+exports and comparison-plan results carry the same shared analysis. Missing evidence
+stays Unknown; quota endpoint movement never becomes per-run burn. See
+[comparison export](docs/comparison-export.md) for the result shapes and conventions.
 
 The earlier [Issue #1](https://github.com/recoveryrob83-lab/PennyTel-AX/issues/1) corrections remain documented in the [Sheet reconciliation](docs/schema-reconciliation.md). Pre-correction synthetic exports with inclusive run-input semantics or letter grades must still be regenerated or explicitly corrected; v1 normalization does not reinterpret them.
 

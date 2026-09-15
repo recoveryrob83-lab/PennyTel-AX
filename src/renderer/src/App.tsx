@@ -4,6 +4,7 @@ import { summarize, money } from '../../shared/metrics'
 import { singular } from '../../shared/fields'
 import { RecordEditor, type EditTarget } from './components/RecordEditor'
 import { Modal, RecordDetails, RunMetrics } from './components/ui'
+import { ExecutionEvidenceDetails } from './components/ExecutionEvidenceDetails'
 import { Slices } from './pages/Slices'
 import { Compare } from './pages/Compare'
 import { Pricing } from './pages/Pricing'
@@ -236,6 +237,7 @@ export default function App(): React.JSX.Element {
         >
           <div className="modal-body">
             <RunMetrics run={selectedRun} />
+            <ExecutionEvidenceDetails evidence={selectedRun.executionEvidence} />
             <RecordDetails table="runs" record={selectedRun} />
             <section className="linked-evidence">
               <h3>Linked evidence</h3>

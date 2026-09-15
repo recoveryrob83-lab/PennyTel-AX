@@ -1001,6 +1001,15 @@ label.field {
   margin-bottom: 28px;
 }
 
+.execution-evidence-statistics th:first-child {
+  min-width: 240px;
+  max-width: 300px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.execution-evidence-statistics td {
+  min-width: 170px;
+}
 .analytics-workspace {
   min-width: 0;
 }

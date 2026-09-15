@@ -193,6 +193,11 @@ export function validateExecutionEvidence(
 ): asserts value is ExecutionEvidence {
   evidence(value, path)
   const data = value as ExecutionEvidence
+  if (
+    data.peakInvocation?.contextWindowTokens !== undefined &&
+    data.peakInvocation.inputTokens > data.peakInvocation.contextWindowTokens
+  )
+    invalid(`${path}.peakInvocation.inputTokens`, 'exceeds paired context window.')
   if (data.modelInvocationCount === 0 && data.peakInvocation !== undefined)
     invalid(`${path}.peakInvocation`, 'requires at least one model invocation.')
   if (

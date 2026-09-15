@@ -50,6 +50,12 @@ The plan does not contain a dataset revision. At execution, PennyTel obtains one
 
 One run writes one `pennytel-comparison-plan-results` object with `resultsFormatVersion: 1`, explicit PennyTel app version, source dataset schema/revision, one shared `generatedAt`, plan identity, and an ordered `results` array. Each result preserves its `id` and `name` and embeds the complete ordinary `pennytel-comparison` analysis, including its normalized reconstructable context and source revision. Results are never reduced to summaries or omitted.
 
+PennyTel 0.2.1 also accepts `evidenceSourceKind` and `runtimeVersion` as ordinary
+filter/group dimensions, including `null` filters for missing evidence. Every
+embedded analysis includes the shared `analytics.executionEvidence` distributions
+and source/runtime coverage described in [comparison export](comparison-export.md).
+The plan/result format versions and one-snapshot execution semantics are unchanged.
+
 Plans are executable analysis requests, and results are derived analysis. Neither is telemetry and neither can be imported through Data & portability.
 
 ## Security boundary

@@ -159,6 +159,57 @@ describe('schema v2 compatibility and economics', () => {
 })
 
 describe('strict, bounded execution evidence', () => {
+  it.each([0, 90_000, 200_000])(
+    'accepts paired occupancy of %i without normalization',
+    (inputTokens) => {
+      const executionEvidence = {
+        ...evidenceFixture(),
+        peakInvocation: { inputTokens, contextWindowTokens: 200_000 }
+      }
+      const data = fixture()
+      data.runs[0].executionEvidence = executionEvidence
+      const before = structuredClone(data)
+      expect(() => validateExecutionEvidence(executionEvidence)).not.toThrow()
+      expect(() => validateDataset(data)).not.toThrow()
+      expect(normalizeDataset(data)).toEqual(before)
+      expect(mergeImport(emptyDataset(), JSON.stringify(data)).data).toEqual(before)
+      expect(data).toEqual(before)
+    }
+  )
+
+  it.each([200_001, 300_000])(
+    'rejects %i input above its paired window at every data boundary',
+    (inputTokens) => {
+      const executionEvidence = {
+        ...evidenceFixture(),
+        modelContextWindowTokens: 1_000_000,
+        peakInvocation: { inputTokens, contextWindowTokens: 200_000 }
+      }
+      const record = runFixture({ executionEvidence })
+      const data = { ...fixture(), runs: [record] }
+      const current = fixture()
+      const before = structuredClone({ data, current })
+      const error = 'peakInvocation.inputTokens: exceeds paired context window.'
+      expect(() => validateExecutionEvidence(executionEvidence)).toThrow(error)
+      expect(() => validateRecord('runs', record)).toThrow(error)
+      expect(() => validateDataset(data)).toThrow(error)
+      expect(() => normalizeDataset(data)).toThrow(error)
+      expect(() => mergeImport(emptyDataset(), JSON.stringify(data))).toThrow(error)
+      expect(() =>
+        mergeImport(current, JSON.stringify({ schemaVersion: 2, runs: [record] }))
+      ).toThrow(error)
+      expect(() =>
+        applyMutation(current, {
+          kind: 'save',
+          table: 'runs',
+          revision: current.revision,
+          record
+        })
+      ).toThrow(error)
+      expect({ data, current }).toEqual(before)
+    }
+  )
+
   it.each([0, 1])(
     'rejects a peak with %i input tokens when invocation count is zero',
     (inputTokens) => {

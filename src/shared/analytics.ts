@@ -1,5 +1,13 @@
 import type { Run } from './types'
-import { measured, runCost, runMinutes, type MeasuredTotal } from './metrics'
+import {
+  measured,
+  peakContextUtilization,
+  recordedCounts,
+  runCost,
+  runMinutes,
+  type MeasuredTotal,
+  type RecordedCounts
+} from './metrics'
 
 /** Descriptive statistics over known samples, never an estimate for missing evidence. */
 export function distribution(samples: (number | null)[]): {
@@ -28,6 +36,30 @@ export function distribution(samples: (number | null)[]): {
   }
 }
 export type Distribution = ReturnType<typeof distribution>
+
+export interface ExecutionEvidenceAnalytics {
+  /** Kind is required on an evidence attachment, so recorded/total is attachment coverage. */
+  sourceKinds: RecordedCounts
+  runtimeVersions: RecordedCounts
+  timeToFirstTokenMs: Distribution
+  modelInvocationCount: Distribution
+  toolCallCount: Distribution
+  peakInputTokens: Distribution
+  peakContextUtilization: Distribution
+}
+
+export function executionEvidenceAnalytics(runs: Run[]): ExecutionEvidenceAnalytics {
+  const evidence = runs.map((run) => run.executionEvidence)
+  return {
+    sourceKinds: recordedCounts(evidence.map((e) => e?.kind)),
+    runtimeVersions: recordedCounts(evidence.map((e) => e?.runtimeVersion)),
+    timeToFirstTokenMs: distribution(evidence.map((e) => e?.timeToFirstTokenMs ?? null)),
+    modelInvocationCount: distribution(evidence.map((e) => e?.modelInvocationCount ?? null)),
+    toolCallCount: distribution(evidence.map((e) => e?.toolCallCount ?? null)),
+    peakInputTokens: distribution(evidence.map((e) => e?.peakInvocation?.inputTokens ?? null)),
+    peakContextUtilization: distribution(evidence.map(peakContextUtilization))
+  }
+}
 
 export function reasoningShare(runs: Run[]): {
   ratio: number | null
@@ -58,6 +90,7 @@ export interface RunAnalytics {
     outputUSD: MeasuredTotal
   }
   reasoningShare: ReturnType<typeof reasoningShare>
+  executionEvidence: ExecutionEvidenceAnalytics
 }
 export function runAnalytics(runs: Run[]): RunAnalytics {
   const priced = runs.filter((run) => runCost(run) !== null)
@@ -81,7 +114,8 @@ export function runAnalytics(runs: Run[]): RunAnalytics {
       cachedInputUSD: component('cachedInputTokens', 'cachedRate'),
       outputUSD: component('outputTokens', 'outputRate')
     },
-    reasoningShare: reasoningShare(runs)
+    reasoningShare: reasoningShare(runs),
+    executionEvidence: executionEvidenceAnalytics(runs)
   }
 }
 export interface TemporalAnalytics {

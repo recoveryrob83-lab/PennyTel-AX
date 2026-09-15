@@ -2,7 +2,7 @@
 
 Use **Export comparison** on Compare. Use **Export dataset** on Data & portability for the canonical raw telemetry backup. They are separate artifacts with different purposes. Analysis exports are not importable telemetry and the importer explicitly rejects them.
 
-PennyTel 0.2.0 exports raw telemetry as schema v2 and reports `source.datasetSchemaVersion: 2` here. The analysis format remains version 1. Structured execution evidence is retained in raw exports; it does not introduce new derived metrics, infer workflow labels, or feed quota readings into the existing usage-burn analysis.
+PennyTel 0.2.1 exports raw telemetry as schema v2 and reports `source.datasetSchemaVersion: 2` here. The analysis format remains version 1. Structured execution evidence stays in raw exports; additive descriptive evidence analytics are documented below. Evidence does not infer workflow labels or feed quota readings into the existing usage-burn analysis.
 
 The renderer sends only `{ revision, context }` through the typed preload API. The main process validates the request, reads its own authoritative dataset, rejects a stale revision, and builds analysis using `src/shared/comparison.ts`, also used by the UI. It never trusts derived metrics supplied by the renderer. Native save dialogs and the live-file/backup protection are shared with raw export. Export is read-only with respect to the dataset and its revision. App version comes from bundled package metadata, including when launching the built Electron entry file directly.
 
@@ -122,3 +122,66 @@ Every existing metric bundle also gains `analytics`, including groups, selected 
 `acceptedAnalytics.stages` groups exact role/runType pairs across accepted lifecycles, with source IDs and measured cost/wall totals. `.outcomes` supplies slice identity/title, lifecycle IDs, acceptance timestamp, measured implementation/accepted costs and wall time, grade, first-pass state, and complete repair cost or null. Implementation bars exclude explicit linked repairs even when their recorded role is Implementer. Implementation and accepted bars share a scale and label incomplete known subtotals. Quality/cost plots use only recorded grades and complete recorded accepted costs; they describe whole outcomes, not attribution to one configuration. Details and source IDs preserve inspection of omitted/partial evidence.
 
 Automated analytics coverage is in `tests/analytics.test.ts` and `tests/analytics-ui.test.tsx`; the existing accepted-outcome Electron QA exercises the new workspace using the same isolated production-shaped fixture, including filtering, charts, export, source inspection, narrow layout, and raw-data/restart stability.
+
+## PennyTel 0.2.1 execution evidence (additive analysis v1)
+
+The run detail modal includes read-only execution metrics, source-log provenance,
+runtime/session/repository metadata, quota snapshots and attribution, and recorded
+environment constraints. It consumes the existing schema-v2 `executionEvidence`
+attachment. Raw logs, prompts, reasoning and tool payloads are not available here.
+
+Every `RunAnalytics` bundle now includes `executionEvidence`:
+
+| Field | Shape and meaning |
+| --- | --- |
+| `sourceKinds` | `RecordedCounts`: `{ counts: [{ value, count }], recorded, total, complete }`. Kind is required on an attachment, so `recorded/total` is execution-evidence coverage across runs. It does not claim optional metrics are complete. |
+| `runtimeVersions` | The same count shape over exact recorded runtime versions, with independent coverage. |
+| `timeToFirstTokenMs` | `Distribution` of recorded run TTFT in milliseconds. |
+| `modelInvocationCount` | `Distribution` of recorded model invocations per run. |
+| `toolCallCount` | `Distribution` of recorded tool calls per run. |
+| `peakInputTokens` | `Distribution` of recorded per-run `peakInvocation.inputTokens`, already including cached input. |
+| `peakContextUtilization` | `Distribution` of per-run `peakInvocation.inputTokens / peakInvocation.contextWindowTokens`, a ratio, not percentage points. |
+
+`Distribution` retains the existing fields: `sampleCount`, `knownCount`,
+`unknownCount`, `mean`, `median`, `min`, `max`, `sampleStandardDeviation`.
+Every run in the bundle counts in `sampleCount`. Missing attachments and omitted
+measurements contribute Unknown samples; recorded zero contributes a known sample.
+No known values means null statistics; fewer than two means null sample SD.
+Empty sets have no known metric and incomplete source coverage. Runtime text
+`Unknown` is a recorded category, distinct from an omitted runtime version.
+
+Utilization requires the window recorded on the **same peak invocation**. Neither
+the top-level model window, registry metadata, cumulative run input nor cached-input
+addition can substitute for that pair. Occupancy can be known while utilization
+is Unknown. Paired input must be between zero and its positive context window
+inclusive; equality gives utilization 1. Above-window evidence is rejected at
+validation, never clamped or normalized. The mean is an unweighted mean of known
+per-run peak ratios, not a pooled token ratio. These are descriptive distributions
+of observed peaks, not a trace, utilization over time, or causal comparison.
+
+The workspace displays overall and current-group evidence distributions and
+coverage, with source-group inspection. The same fields flow through top-level
+`analytics`, metric bundles on summary/groups/candidates/accepted lifecycles and
+stages, and dated `temporal.days`. Existing bundle run IDs and group membership
+identify the source records in the matching raw export. Exports retain numeric
+precision; the statistics UI uses six significant digits and does not round small
+positive measurements to zero.
+
+`evidenceSourceKind` and `runtimeVersion` are the only new ordinary filter/group
+dimensions. Both use exact recorded nested values. Filters use the recorded text;
+`null` selects missing evidence and an empty string clears the filter. Group keys
+reuse `["recorded", value-or-null]`, with missing groups displayed as
+`Unknown (not recorded)`. Legacy runs participate normally. All filters/stages
+must match the same run; qualifying accepted slices still reopen their full relevant
+lifecycle. Exports retain active context, selected group and membership as before.
+
+Quota first/last used-percent values, window/reset/plan metadata and
+Clean/Contaminated/Unknown attribution remain descriptive run-detail evidence.
+Even Clean attribution does not turn coarse endpoint movement into precise burn.
+No quota-derived usage, cost, delta or causal aggregate is introduced. Existing
+explicit burn/remaining-meter semantics are unchanged.
+
+`tests/evidence-analytics.test.ts` and `tests/evidence-ui.test.tsx` cover this
+derivation, display, identity, compatibility and export parity.
+`scripts/electron-evidence-analysis-qa.mjs`, invoked by the existing execution-evidence
+QA command, exercises the same path in the actual Electron application.

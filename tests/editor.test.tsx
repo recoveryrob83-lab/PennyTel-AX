@@ -48,7 +48,11 @@ describe('record editor behavior', () => {
     const input = screen.getByLabelText('Execution evidence JSON')
     for (const bad of [
       '{broken',
-      JSON.stringify({ ...evidenceFixture(), toolOutput: 'forbidden' })
+      JSON.stringify({ ...evidenceFixture(), toolOutput: 'forbidden' }),
+      JSON.stringify({
+        ...evidenceFixture(),
+        peakInvocation: { inputTokens: 300_000, contextWindowTokens: 200_000 }
+      })
     ]) {
       fireEvent.change(input, { target: { value: bad } })
       fireEvent.submit(screen.getByRole('button', { name: 'Save run' }).closest('form')!)
