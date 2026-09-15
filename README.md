@@ -1,76 +1,124 @@
-# PennyTel v0.1
+# PennyTel 0.2.1
 
-A local PennyOS Engineering telemetry workbench. Record slices, runs, findings, discoveries, and historical pricing; compare accepted work by cost, time, quality, role, and workflow. Electron + React + TypeScript, using the supplied electron-vite scaffold. No additional dependencies were needed.
+PennyTel is a local-first engineering telemetry workbench for comparing real LLM-assisted software work.
 
-## Run locally
+It records bounded work slices, model runs, critic/repair passes, findings, discoveries, token usage, historical pricing, acceptance outcomes, and normalized execution evidence. The goal is not to produce a magic model score; it is to preserve enough evidence to ask useful questions about cost, time, quality, workflow, and reliability without turning missing data into invented certainty.
 
-With the scaffold's installed dependencies:
+PennyTel is built with Electron, React, TypeScript, and electron-vite.
+
+## Trust model
+
+PennyTel is designed to be auditable and local-first.
+
+- No account is required.
+- No API key is required.
+- No cloud backend is required.
+- Normal telemetry is stored locally in Electron's per-user PennyTel data directory.
+- Raw Codex logs are not ingested wholesale into the PennyTel dataset; schema-v2 execution evidence stores normalized metrics and provenance only.
+- Missing evidence stays Unknown. Recorded zero stays zero.
+- The Electron renderer remains sandboxed with a narrow typed preload/IPC surface.
+
+If you do not want to run a binary built by someone else, fork the repository, inspect it, and build it yourself.
+
+## Build from source
+
+Requirements:
+
+- Node.js 24 (see `.nvmrc`)
+- npm 11
+- Git
+
+Clone and install:
+
+```bash
+git clone https://github.com/recoveryrob83-lab/PennyTel-AX.git
+cd PennyTel-AX
+npm ci
+```
+
+Run in development:
 
 ```bash
 npm run dev
 ```
 
-Or run the production build:
+Build and run the production application locally:
 
 ```bash
 npm run build
 npm start
 ```
 
-Use Electron, not the renderer URL in a standalone browser. The renderer deliberately has no browser-storage fallback. No account, network connection, Google Sheet access, or API key is required. The notebook starts without generated telemetry. The supplied canonical Model Registry is seeded locally with its published source metadata and pricing history.
+Use Electron rather than opening the renderer URL in a standalone browser. The renderer deliberately has no browser-storage fallback.
+
+### Windows installer
+
+On Windows, PennyTel already includes `electron-builder` configuration for an NSIS installer:
+
+```bash
+npm ci
+npm run build:win
+```
+
+The configured installer artifact is named like:
+
+```text
+pennytel-0.2.1-setup.exe
+```
+
+Windows code signing is not configured, so self-built or unsigned release binaries may trigger Windows publisher/SmartScreen warnings.
+
+Linux and macOS packaging scripts also exist in `package.json`; packaged-platform acceptance is separate from the verified development/runtime workflow.
 
 ## First workflow
 
-1. Inspect **Model Registry** for canonical models, provider offers, reasoning levels, benchmarks and dated pricing. Use **Import / update registry** to validate and install an updated JSON. **Pricing history** retains legacy user records with explicit registry precedence.
-2. In **Slice notebook**, create a bounded piece of work. Only an ID and title are required. Add project, task shape, ambiguity, risk, and workflow when known.
-3. Add implementation, criticism, repair, or other runs. A run needs an ID, slice, run type, and factory role. Record model/provider identity and token counts to calculate cost. Registry pricing can use a run start timestamp, an explicit pricing reference date, or the slice start date. Enter explicit zeroes when usage is known to be zero.
-4. Add findings with distinct severity/category and links to discovery/repair runs. Add autonomous discoveries and update independent validation when evidence arrives.
-5. Use **Accept now** in an in-progress slice's editor to set Accepted and stamp the current time, then **Save slice**. Quality grade and preferred candidate remain your separate judgments. Edit acceptance with the local date/time control (timezone shown), or choose the explicit exact ISO-with-timezone option. Existing acceptance times disable Accept now until explicitly cleared; changing disposition retains acceptance history. Operator-measured time to acceptance is also supported.
-6. In **Compare**, group and filter runs, inspect the underlying evidence, and compare full accepted-slice economics. A slice must contain a run matching all active run filters to qualify; its cost still includes the full relevant lifecycle across all models and roles. Use **Export comparison** to save the current derived analysis separately from the raw dataset.
+1. Inspect **Model Registry** for canonical models, provider offers, reasoning levels, benchmarks, and dated pricing.
+2. In **Slice notebook**, create a bounded piece of work.
+3. Add implementation, critic, repair, verification, or support runs. Record only evidence you actually have.
+4. Add findings and discoveries, keeping criticism, repair, and validation links explicit.
+5. Accept a slice when the product outcome is actually accepted; quality remains an operator judgment on a 1–5 scale.
+6. Use **Compare** to inspect run cohorts and full accepted-slice lifecycle economics.
+7. Use **Export dataset** for canonical importable telemetry and **Export comparison** for non-importable derived analysis.
 
-Every record can be edited. Deletion asks for confirmation and protects referenced slices/runs. Deleting a price retains run snapshots. Closing an edited form requires explicit discard; a failed save keeps the draft open. Unsaved drafts do not persist after quitting the application.
+Every record can be edited. Deletion protects referenced slices/runs. Failed saves retain the draft. Imports are additive and atomic: identical records are skipped, conflicts are rejected, and existing records are not silently overwritten.
 
-## Persistence and portability
+## Schema v2 and execution evidence
 
-The Electron main process owns the dataset, including the durable Model Registry. Startup seeds a missing registry through the same guarded transaction path without erasing telemetry. The seed is bundled into the application; an installed AppImage needs no repository docs directory. It validates every transaction, serializes writes, checks revisions, writes a temporary file, flushes it, and atomically replaces `telemetry.json`. When a live revision exists, the previous revision is saved as `telemetry.backup.json`; the first save in a genuinely new profile creates only the live file. A single-instance lock prevents competing application instances from editing the same profile.
+PennyTel 0.2.1 uses raw dataset schema v2. Valid schema-v1 datasets remain loadable/importable through deterministic normalization; simply reading an old dataset does not rewrite it.
 
-**Data & portability** shows the exact storage path. Default storage is Electron's per-user PennyTel application-data directory. `PENNYTEL_DATA_DIR=/absolute/path` selects another directory, useful for a portable dataset or isolated QA. Close PennyTel before manually replacing its data files. If a dataset cannot be read or validated, the app preserves it and refuses writes. To recover, close the app and restore a valid export or its previous-revision backup to `telemetry.json`.
+A run may contain optional structured `executionEvidence` for normalized Codex rollout facts such as source provenance, session/turn identity, runtime version, TTFT, invocation/tool-call counts, paired peak context occupancy, coarse quota-window readings, and execution-environment constraints.
 
-A missing live file with any backup entry (including damaged or dangling recovery evidence) also blocks loading and writes. Before restoring, preserve a separate copy of the backup, then copy a valid dataset to `telemetry.json` while PennyTel is closed. Saves recheck the live file before rotating backups; external changes require reopening the app.
+Execution evidence does **not** infer PennyOS workflow semantics such as slice, run type, role, result, or context mode. Those remain explicit operator/orchestrator metadata.
 
-Both exports reject live/backup filesystem aliases, including hard links and paths through linked directories. Symlink destinations and indeterminate file identities are rejected conservatively. Choose a regular export file; it is written through atomic replacement rather than truncating a followed link.
+Quota `usedPercent` evidence is descriptive source evidence and is not converted into legacy remaining-percentage usage burn. Raw prompts, hidden reasoning, source excerpts, tool commands, and full tool output are outside the normal PennyTel dataset contract.
 
-Export a JSON dataset through the native save dialog. Import a JSON file or pasted batch, validate/preview, and then add its records. Import is atomic and additive: identical records are skipped; conflicts and invalid relationships are rejected. No existing records are silently overwritten. Export regularly to retain more than one revision. See [the data contract](docs/data-contract.md).
+See:
+
+- [Data contract](docs/data-contract.md)
+- [Model Registry](docs/model-registry.md)
+- [Comparison export contract](docs/comparison-export.md)
+- [Comparison plan contract](docs/comparison-plan.md)
 
 ## Measurement conventions
 
-- Input tokens mean **fresh / noncached** input. Cached input is additional and may exceed fresh input. Cost is `(fresh × input rate + cached × cached rate + output × output rate) / 1,000,000`. Output tokens **include** reasoning tokens; reasoning is not billed twice.
-- Registry pricing uses stable model/provider identity and the newest covering rate, with date preference: UTC run start → explicit pricing reference date → slice start date. Eligible unpriced runs backfill on registry installation/update and telemetry edits. Existing snapshots stay frozen. Legacy pricing remains readable with registry precedence; all three overrides remain an explicit run correction route. See [Model Registry](docs/model-registry.md) for matching, migration and snapshot provenance.
-- Missing data remains unknown. Partial totals show known cost and record coverage. No-rate or unknown-token runs are not treated as free. Cache ratio is `cached / (fresh + cached)`, token-weighted across runs with both counts known. A zero denominator stays unknown.
-- Run time is the sum of recorded wall times. Time to acceptance is operator-measured or elapsed from the first recorded run to the acceptance timestamp; concurrent runs are not summed into elapsed acceptance time.
-- Accepted-slice cost includes all candidates and roles that started by acceptance, plus undated runs. Without an acceptance timestamp it includes all runs and says so. A run crossing the acceptance boundary must have its timestamps corrected. Post-acceptance findings/discoveries remain in the slice evidence.
-- Subscription burn is separate from dollar cost. Record **remaining percentages** from 0–100: `94 → 92` burns **2 percentage points**. An increase or `usageReset: true` makes inferred burn unknown. Explicit measured `usageBurn` overrides these rules. Endpoints alone cannot detect a hidden reset; mark one when known. Local hour and weekday remain explicit operator-local telemetry.
-- Validated autonomous discovery means `selfInitiated: true`, `inPrompt: false`, and `validation: "Yes"`. Unknown prompt presence does not earn credit. Adoption is separately recorded as Yes, No, or Deferred.
-- A finding's run link identifies where it was discovered, not which model caused it. P0/P1/P2 counts exclude dismissed findings and observations but retain repaired defects. Findings preserve title, description, evidence, contract/invariant, impact, confidence, and separate notes.
-- Final product quality is an **operator-assigned integer 1–5**. Compare can filter by grade; the analysis export provides grade distributions without a synthetic combined score.
-- Normal timestamp displays use human-readable local dates/times with a timezone label. Persisted timestamps and exported timestamps remain ISO with timezone. Calendar-only dates are displayed without timezone shifts.
-- Acceptance edits use the computer's local timezone and persist ISO UTC (`Z`); unchanged timestamps keep their original offset and precision. Nonexistent daylight-saving times are rejected, and repeated local times require the exact timestamp option with an explicit offset.
+- `inputTokens` = fresh/noncached input.
+- `cachedInputTokens` = additional cached input.
+- `outputTokens` includes reasoning.
+- `reasoningTokens` is a subset of output and is never billed twice.
+- Cost is derived from frozen historical price snapshots when the required token/rate evidence exists.
+- Missing measurements remain Unknown rather than becoming zero/free.
+- Subscription meter evidence remains separate from API-equivalent dollar cost.
+- Accepted-outcome economics use the recorded lifecycle through acceptance rather than pretending one visible run explains the whole outcome.
+- Findings record where a defect was discovered; they do not automatically assign blame to that model.
+- Final product quality is an operator-assigned integer from 1–5, not an automated composite score.
 
-## Authoritative schema and analysis export
+## Persistence and portability
 
-PennyTel 0.2.1 uses schema v2 with optional, strictly validated execution-source evidence. Valid v1 datasets load/import through deterministic normalization; loading alone does not rewrite storage, and raw export emits v2. See the [data contract](docs/data-contract.md) for exact evidence fields, migration, privacy, token/quota semantics and source-hash rules. Raw Codex logs remain external; no workflow labels are inferred from them.
+The Electron main process owns the dataset and Model Registry. Writes are validated, serialized, provenance-checked, flushed, and atomically replaced. When a live revision exists, the previous revision is preserved as `telemetry.backup.json`.
 
-Open a run to inspect its read-only execution evidence, including provenance, TTFT,
-invocation/tool counts, paired peak context utilization, quota attribution and
-environment constraints. Compare includes coverage-aware evidence distributions
-and exact source-kind/runtime-version filters and groups. Ordinary comparison
-exports and comparison-plan results carry the same shared analysis. Missing evidence
-stays Unknown; quota endpoint movement never becomes per-run burn. See
-[comparison export](docs/comparison-export.md) for the result shapes and conventions.
+**Data & portability** shows the active storage path. Set `PENNYTEL_DATA_DIR=/absolute/path` to use another directory for an isolated or portable dataset. Close PennyTel before manually replacing data files.
 
-The earlier [Issue #1](https://github.com/recoveryrob83-lab/PennyTel-AX/issues/1) corrections remain documented in the [Sheet reconciliation](docs/schema-reconciliation.md). Pre-correction synthetic exports with inclusive run-input semantics or letter grades must still be regenerated or explicitly corrected; v1 normalization does not reinterpret them.
-
-**Export dataset** remains canonical, raw, importable JSON. **Export comparison** creates `kind: "pennytel-comparison"`, analysis format v1 JSON containing app version, source revision, generated timestamp, active context, cohort/evidence IDs, group summaries, full acceptance economics, severity/category counts, validated discoveries, grade distributions, and coverage. It is explicitly rejected by telemetry import. The main process derives it from its authoritative snapshot using the same calculations as the UI. Partial totals and unknowns remain distinguishable; no PDF/CSV/reporting infrastructure is added. See [the analysis contract](docs/comparison-export.md).
+Raw dataset exports are canonical/importable. Comparison exports and comparison-plan results are derived analysis artifacts and are deliberately non-importable.
 
 ## Verification
 
@@ -82,16 +130,25 @@ npm run build
 npm run test:electron
 ```
 
-Unit tests cover costing, pricing history, missing data, role subtotals, acceptance, discovery credit, schema validation, relationship protection, imports, storage recovery behavior, stale writers, and editor drafts. `test:electron` builds and runs Playwright against the actual Electron app. It creates **synthetic QA records only** in a new `test-results/electron-qa-*` directory. It exercises record creation/editing, pricing snapshots, comparison/filtering, protected deletion, JSON import/export, restart persistence, and narrow-window layout. Screenshots are retained there. Native file dialog return paths are supplied by the harness; application IPC, validation, and filesystem operations are real. A working desktop display is required. Linux sandbox restrictions may require your normal approved execution environment; the app itself does not disable its renderer sandbox.
+The repository includes unit, integration, persistence/recovery, import/export, analytics, comparison-plan, schema-v2 execution-evidence, and real Electron QA. Electron QA uses isolated synthetic profiles and verifies the sandbox/context-isolation security boundary.
 
-See the [verification record](docs/verification.md) for results, runtime evidence, and verification limits.
+See [verification.md](docs/verification.md) for recorded verification details and limits.
 
-## Implementation map and limits
+## Repository map
 
-- `src/shared`: explicit typed contract, form field metadata, validation/transactions, and deterministic metrics.
-- `src/main`: durable local store, native import/export dialogs, and narrowly scoped IPC.
-- `src/preload`: typed API only; no generic IPC or filesystem access in the renderer.
-- `src/renderer/src`: modular notebook, comparisons, pricing, portability, and shared editor/detail components.
-- `tests` and `scripts/electron-smoke.mjs`: automated and actual Electron verification.
+- `src/shared` — domain types, schema validation, pricing/metrics, comparison and analytics logic.
+- `src/main` — authoritative local persistence, import/export dialogs, comparison-plan execution, IPC authority.
+- `src/preload` — narrow typed bridge into the renderer.
+- `src/renderer/src` — notebook, evidence inspection, comparisons, analytics, registry and portability UI.
+- `tests` — deterministic unit/integration coverage.
+- `scripts` — Electron runtime QA.
+- `docs` — contracts, context maps, verification records and engineering notes.
+- `MASTER_INDEX.md` — evidence-based repository navigation for engineering work.
 
-v0.1 loads one JSON dataset into memory and rewrites it per transaction. It is intended for personal engineering datasets, not high-volume event streams or multi-user editing. JSON import is the ingestion seam; CSV/Sheet adapters, live prices, multiple currencies, model execution, integrations, cloud sync, authentication, inference of missing telemetry, and statistical significance claims are deliberate non-goals. Packaged installers are configured but are separate from the verified local development/production workflow. No commit is created as part of implementation.
+## Scope
+
+PennyTel is currently a local engineering workbench, not a cloud observability platform. It intentionally does not provide authentication, cloud sync, model execution, generic terminal control, automatic causal claims, or automatic model-routing recommendations.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
