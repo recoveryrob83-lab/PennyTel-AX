@@ -1,7 +1,7 @@
 # PennyTel repository map
 
-Evidence-based map of the repository at accepted Slice 5 product candidate
-`92b258170f51098968d5f235a10e539df1012bb5` (product version `0.1.4`). This
+Evidence-based map of the repository at accepted `0.1.5` product candidate
+`e6a690ad26272f6236ae674595a693a95dbc544c`. This
 is a navigation aid for future slices, not a replacement for the assigned
 GitHub Issue or the authoritative contracts in `docs/`.
 
@@ -11,8 +11,10 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - v1 data contract and field semantics: [`docs/data-contract.md`](docs/data-contract.md)
 - Registry contract and update behavior: [`docs/model-registry.md`](docs/model-registry.md)
 - Comparison analysis contract: [`docs/comparison-export.md`](docs/comparison-export.md)
+- Comparison plan contract: [`docs/comparison-plan.md`](docs/comparison-plan.md)
 - Accepted Slice 4 context map: [`docs/context-maps/Slice_4_Accepted_Outcome_Economics_Context_Map.md`](docs/context-maps/Slice_4_Accepted_Outcome_Economics_Context_Map.md)
 - Slice 5 comparison analytics/filtering context map: [`docs/context-maps/Slice_5_Comparison_Analytics_and_Filters_Context_Map.md`](docs/context-maps/Slice_5_Comparison_Analytics_and_Filters_Context_Map.md)
+- Slice 6 telemetry evidence context map: [`docs/context-maps/Slice_6_Telemetry_Evidence_Contract_Context_Map.md`](docs/context-maps/Slice_6_Telemetry_Evidence_Contract_Context_Map.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
 - Canonical registry input: [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json)
 - Runtime/verification record: [`docs/verification.md`](docs/verification.md) and [`docs/bounded-repair-verification.md`](docs/bounded-repair-verification.md)
@@ -36,8 +38,9 @@ map and use this master index when broader repository geography is needed.
   requests are denied.
 - The main process registers the only application IPC handlers:
   `telemetry:load`, `telemetry:mutate`, `telemetry:preview`, `telemetry:open`,
-  `telemetry:export`, and `telemetry:export-comparison`. Each handler checks
-  that the caller is the primary window's main frame before acting.
+  `telemetry:export`, `telemetry:export-comparison`, and
+  `telemetry:run-comparison-plan`. Each handler checks that the caller is the
+  primary window's main frame before acting.
 - [`src/main/store.ts`](src/main/store.ts) is the authoritative in-memory and
   on-disk dataset owner. Registry seeding, validation, mutation serialization,
   revision checks, recovery guards, and backfill all pass through
@@ -50,7 +53,7 @@ map and use this master index when broader repository geography is needed.
 
 - [`src/preload/index.ts`](src/preload/index.ts) exposes exactly one typed
   `window.pennytel` API through `contextBridge`: load, mutate, preview import,
-  open import, export dataset, and export comparison.
+  open import, export dataset, export comparison, and run comparison plan.
 - [`src/preload/index.d.ts`](src/preload/index.d.ts) supplies the renderer's
   global `Window.pennytel` type. There is no generic IPC or filesystem API in
   the renderer.
@@ -72,7 +75,7 @@ map and use this master index when broader repository geography is needed.
 
 ## Domain, schema, and data flow
 
-- [`src/shared/types.ts`](src/shared/types.ts) defines the v1 envelope and
+- [`src/shared/types.ts`](src/shared/types.ts) defines the current v1 envelope and
   domain records:
   `Dataset` contains `schemaVersion`, `revision`, five arrays (`slices`,
   `runs`, `findings`, `discoveries`, `pricing`), and optional `registry`;
@@ -91,7 +94,8 @@ map and use this master index when broader repository geography is needed.
   the dataset revision;
   `mergeImport` validates an additive batch, skips identical records,
   rejects conflicts, checks combined relationships, and backfills new runs;
-  `snapshotRun` is the main-process pricing snapshot selector.
+  `snapshotRun` is the main-process pricing snapshot selector. The same file's
+  `PennyTelAPI` type includes the analysis-only `runComparisonPlan` bridge.
 - Record relationships are intentionally same-slice: runs belong to slices;
   findings and discoveries may link to runs in their own slice; referenced
   slices/runs cannot be deleted until their children/links are removed.
@@ -144,6 +148,15 @@ evidence blocks loading/writing rather than silently starting empty.
   distinct derived artifact with `kind: "pennytel-comparison"` and is not
   importable. Slice 5 adds bounded filter context and shared analytics to that
   derived artifact without changing raw dataset import/export semantics.
+- [`src/shared/comparison-plan.ts`](src/shared/comparison-plan.ts) validates and
+  executes declarative comparison plans against one loaded dataset snapshot;
+  [`src/main/comparison-plan.ts`](src/main/comparison-plan.ts) owns the
+  choose/load/save orchestration. Plan inputs and result bundles are analysis
+  artifacts, not telemetry, and `mergeImport()` rejects both kinds.
+- [`docs/comparison-plan.md`](docs/comparison-plan.md) documents the current
+  plan/results shape and the authority/security boundary. The runner embeds
+  ordinary comparison analyses and remains separate from raw dataset
+  export/import.
 - [`docs/comparison-export.md`](docs/comparison-export.md) documents the
   additive analysis-v1 configuration, date/outcome filter, and analytics
   dimensions, including identity-key versus presentation-label semantics.
@@ -361,7 +374,7 @@ The bundled seed is statically imported by `src/main/store.ts` from
 - [`src/renderer/src/App.tsx`](src/renderer/src/App.tsx) and the main-process
   package metadata share the `package.json` version source; the sidebar/header
   display and `comparisonExport()` app metadata therefore remain aligned at
-  version `0.1.4` for the accepted Slice 5 product candidate.
+  version `0.1.5` for the accepted comparison-plan product candidate.
 
 ## Tests by architectural area
 
@@ -377,6 +390,7 @@ under `tests/**/*.test.{ts,tsx}`.
 | Filesystem-safe export | [`tests/export.test.ts`](tests/export.test.ts) | Regular destinations, live/backup aliases, links, dangling/unresolvable identities, raw and comparison output |
 | Configuration identity and comparison | [`tests/configuration.test.ts`](tests/configuration.test.ts), [`tests/configuration-fixtures.ts`](tests/configuration-fixtures.ts), [`tests/comparison.test.ts`](tests/comparison.test.ts) | Canonical/alias identity, recorded thinking and Unknown behavior, ExtraHigh/XHigh presentation, collision-safe labels and bounded derived requests, multi-candidate/stage selection, grouping/filtering/export, raw import and historical cost/snapshot stability |
 | Comparison calculations/export | [`tests/comparison.test.ts`](tests/comparison.test.ts) | Cohort qualification, ORed stage scopes, full lifecycle retention, source and derived filters/grouping/order/selection, candidate evidence coverage, quality, unknown/zero/partial measurements, stale/untrusted export requests |
+| Comparison plan runner | [`tests/comparison-plan.test.ts`](tests/comparison-plan.test.ts), [`tests/compare-ui.test.tsx`](tests/compare-ui.test.tsx), [`tests/export.test.ts`](tests/export.test.ts) | Strict plan validation, bounded IDs/entries, ordered multi-comparison execution, shared revision/context analysis, cancellation/failure UI state, and safe derived-result export |
 | Descriptive analytics | [`tests/analytics.test.ts`](tests/analytics.test.ts) | Known/unknown distributions, median/spread, cost-component reconciliation, reasoning share, UTC temporal grouping, date/provider/offer/runtime/outcome filters, accepted aggregate coverage, source IDs, and non-importable export stability |
 | Accepted-outcome economics | [`tests/accepted-outcome.test.ts`](tests/accepted-outcome.test.ts), [`tests/accepted-outcome-fixture.json`](tests/accepted-outcome-fixture.json) | Multi-stage/cross-model lifecycle economics, first-pass Yes/No/Unknown, repair-link deduplication, partial/zero evidence, frozen pricing, reasoning coverage, export and raw-data stability |
 | Renderer comparison and analytics | [`tests/compare-ui.test.tsx`](tests/compare-ui.test.tsx), [`tests/analytics-ui.test.tsx`](tests/analytics-ui.test.tsx) | Shared cohort context, 2+/3+ configuration selection, exact stage controls, date/outcome/Unknown filters, collision labels, keyed export payload, source-linked charts, export failure state, canonical version display across pages |
@@ -410,7 +424,8 @@ scripts exercise the real main/preload/renderer/filesystem path.
   [`scripts/electron-new-profile-qa.mjs`](scripts/electron-new-profile-qa.mjs),
   [`scripts/electron-registry-qa.mjs`](scripts/electron-registry-qa.mjs),
   [`scripts/electron-configuration-qa.mjs`](scripts/electron-configuration-qa.mjs),
-  and [`scripts/electron-accepted-outcome-qa.mjs`](scripts/electron-accepted-outcome-qa.mjs),
+  [`scripts/electron-accepted-outcome-qa.mjs`](scripts/electron-accepted-outcome-qa.mjs),
+  and [`scripts/electron-comparison-plan-qa.mjs`](scripts/electron-comparison-plan-qa.mjs),
   which invokes [`scripts/electron-analytics-qa.mjs`](scripts/electron-analytics-qa.mjs).
   They use Playwright's Electron driver, isolated temporary
   `test-results/electron-qa-*`/repair/new-profile/registry/configuration-runtime-*
@@ -429,6 +444,11 @@ scripts exercise the real main/preload/renderer/filesystem path.
   versus Unknown, stage/source-run inspection, export, restart/raw-data
   stability, narrow-window horizontal-scroll behavior, and the nested analytics
   verification path.
+- [`scripts/electron-comparison-plan-qa.mjs`](scripts/electron-comparison-plan-qa.mjs)
+  uses an isolated profile and real Electron IPC/dialogs to run a multi-entry
+  plan, verify ordered result identities and shared source revision, confirm
+  ordinary comparison export remains distinct, and check the plan-result
+  artifact's non-importable boundary.
 - `electron-analytics-qa.mjs` is the Slice 5 runtime analytics helper. Against
   that isolated profile it verifies descriptive distributions and coverage,
   source-linked charts, UTC date trends, missing-versus-literal-Unknown
@@ -485,6 +505,9 @@ scripts exercise the real main/preload/renderer/filesystem path.
 - Raw dataset export is canonical/importable; comparison export is derived and
   explicitly non-importable. Export destinations may not alias live/backup
   storage.
+- Comparison plans and their result bundles are derived analysis artifacts;
+  they do not mutate telemetry, are not raw export substitutes, and are not
+  importable through the telemetry merge path.
 - Relationship deletion protection prevents orphaned runs, findings, or
   discoveries. Same-slice links are validated before persistence.
 - Acceptance economics and comparison cohorts must retain the full relevant
@@ -497,6 +520,12 @@ scripts exercise the real main/preload/renderer/filesystem path.
 - New telemetry ingestion should enter through the typed `Mutation` union and
   `applyMutation`/`mergeImport`, with `validateRecord`/`validateDataset` and
   `TelemetryStore.mutate` remaining the transaction gates.
+- A schema/evidence extension should keep the shared contract in
+  `src/shared/types.ts` and the strict runtime gates in `src/shared/data.ts`,
+  preserving the main-owned load/mutate/preview/export flow. Nested objects
+  currently use explicit validation in `data.ts` (as with `priceSnapshot`),
+  while `fields.ts` is the editor/catalog extension point for flat record
+  fields.
 - Registry evolution should use the complete JSON parse/validate/update path
   in `src/shared/registry.ts` and `registry-import`; referenced IDs and frozen
   snapshot provenance constrain replacement documents.
@@ -541,6 +570,10 @@ scripts exercise the real main/preload/renderer/filesystem path.
 - There is no production dataset, network price fetch, model execution, cloud
   or Sheet synchronization, or statistical-significance machinery in this
   repository. Unknown telemetry is intentionally not reconstructed.
+- The accepted `0.1.5` source schema is still v1: no normalized execution-source
+  evidence object, v1-to-v2 migration routine, or source-log adapter exists in
+  the current baseline. The only implemented ingestion format is local JSON;
+  raw Codex logs are not parsed by PennyTel.
 - The authoritative behavioral contract for any future slice remains its
   assigned GitHub Issue. Begin slice-specific source discovery from the Issue's
   companion context map. Use this index only when broader repository geography
