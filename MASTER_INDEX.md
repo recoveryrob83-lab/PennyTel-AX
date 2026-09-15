@@ -1,14 +1,14 @@
 # PennyTel repository map
 
-Evidence-based map of the repository at accepted `0.1.5` product candidate
-`e6a690ad26272f6236ae674595a693a95dbc544c`. This
+Evidence-based map of the repository at accepted PennyTel `0.2.0` product
+candidate `3a68d1d19e631711dd99b1d6fdd221021629d476`. This
 is a navigation aid for future slices, not a replacement for the assigned
 GitHub Issue or the authoritative contracts in `docs/`.
 
 ## Start here
 
 - Product/runtime overview: [`README.md`](README.md)
-- v1 data contract and field semantics: [`docs/data-contract.md`](docs/data-contract.md)
+- v2 data contract and field semantics: [`docs/data-contract.md`](docs/data-contract.md)
 - Registry contract and update behavior: [`docs/model-registry.md`](docs/model-registry.md)
 - Comparison analysis contract: [`docs/comparison-export.md`](docs/comparison-export.md)
 - Comparison plan contract: [`docs/comparison-plan.md`](docs/comparison-plan.md)
@@ -75,24 +75,39 @@ map and use this master index when broader repository geography is needed.
 
 ## Domain, schema, and data flow
 
-- [`src/shared/types.ts`](src/shared/types.ts) defines the current v1 envelope and
+- [`src/shared/types.ts`](src/shared/types.ts) defines the current v2 envelope and
   domain records:
   `Dataset` contains `schemaVersion`, `revision`, five arrays (`slices`,
   `runs`, `findings`, `discoveries`, `pricing`), and optional `registry`;
   `Slice`, `Run`, `Finding`, `Discovery`, `Pricing`, `PriceSnapshot`,
-  `Mutation`, and `PennyTelAPI` are the central types.
+  `Mutation`, and `PennyTelAPI` are the central types. `Run.executionEvidence`
+  is the optional structured execution-source evidence relationship; it is
+  attached to a run rather than promoted into separate tables or semantic
+  workflow fields.
 - [`src/shared/fields.ts`](src/shared/fields.ts) is the shared field catalog
   for editor rendering and record validation metadata. It also defines table
   names, relationships, required fields, numeric bounds, enums, and user
-  hints.
+  hints. Execution evidence is a nested run exception, so its shape is owned
+  by `execution-evidence.ts` and `data.ts`, not flattened into this catalog.
+- [`src/shared/execution-evidence.ts`](src/shared/execution-evidence.ts) owns
+  the normalized `codex-rollout` evidence format (format version 1), source
+  provenance, session/turn/runtime metadata, context occupancy, quota-window,
+  and execution-environment types plus strict bounded nested validation. It
+  accepts normalized metrics/provenance only; raw rollout payloads remain
+  external source evidence.
 - [`src/shared/data.ts`](src/shared/data.ts) is the transaction and ingestion
   boundary:
-  `validateRecord` and `validateDataset` enforce shape, types, IDs,
+  `validateRecord` and `validateDataset` enforce the canonical v2 shape, types, IDs,
   timestamps, snapshot provenance, relationships, acceptance constraints, and
   legacy pricing uniqueness;
+  `normalizeDataset` is the explicit detached v1 compatibility path: it
+  validates the original v1 envelope/records and changes only
+  `schemaVersion: 1` to `2`, preserving IDs, relationships, omissions,
+  registry data, and historical price snapshots;
   `applyMutation` handles save/delete/import/registry-import and increments
   the dataset revision;
-  `mergeImport` validates an additive batch, skips identical records,
+  `mergeImport` accepts v1 or v2 input, normalizes before relationship checks,
+  validates an additive batch, skips identical records,
   rejects conflicts, checks combined relationships, and backfills new runs;
   `snapshotRun` is the main-process pricing snapshot selector. The same file's
   `PennyTelAPI` type includes the analysis-only `runComparisonPlan` bridge.
@@ -113,8 +128,9 @@ map and use this master index when broader repository geography is needed.
 Important symbols in [`src/main/store.ts`](src/main/store.ts):
 
 - `readFromDisk()` reads and validates `telemetry.json`, preserves the
-  existing files on failure, and caches the exact loaded live bytes plus a
-  fingerprint of `telemetry.backup.json`.
+  existing files on failure, decodes UTF-8 with fatal error handling, runs
+  `normalizeDataset()` for v1/v2 compatibility, and caches the exact loaded
+  live bytes plus a fingerprint of `telemetry.backup.json`.
 - `requireNewProfile()` distinguishes a genuinely empty profile from late
   live/backup appearance and blocks unsafe writes.
 - `initializeRegistry()` loads existing data and, when the registry is absent,
@@ -124,8 +140,11 @@ Important symbols in [`src/main/store.ts`](src/main/store.ts):
 - `mutate()` queues operations, applies the validated mutation to detached
   state, rechecks live and backup provenance immediately before writing,
   rotates the prior live revision to `telemetry.backup.json`, then atomically
-  replaces the live file. PennyTel refreshes its own backup fingerprint after
-  rotation so a failed live replacement can be retried safely.
+  replaces the live file. Reading a v1 file does not rewrite it, create a
+  backup, or increment revision; the first ordinary mutation publishes v2 and
+  rotates the exact original live bytes into the backup. PennyTel refreshes
+  its own backup fingerprint after rotation so a failed live replacement can
+  be retried safely.
 - `atomicWrite()` writes a unique mode-600 temporary file, flushes it, and
   renames it into place. The queue is retained after failures so a later
   operation can retry without publishing the failed candidate.
@@ -140,14 +159,19 @@ evidence blocks loading/writing rather than silently starting empty.
 - Native import uses `src/main/index.ts`'s open-file dialog, a 10 MB limit, and
   `TelemetryStore.preview()`/`mergeImport()` before the renderer confirms the
   additive transaction.
-- Raw dataset import is accepted only for `schemaVersion: 1`. Registry seed
-  JSON and comparison-analysis JSON are explicitly rejected from telemetry
-  import. Imported revisions are ignored; the local transaction revision is
-  authoritative.
-- Raw dataset export reads the main-owned snapshot. Comparison export is a
-  distinct derived artifact with `kind: "pennytel-comparison"` and is not
-  importable. Slice 5 adds bounded filter context and shared analytics to that
-  derived artifact without changing raw dataset import/export semantics.
+- Raw dataset import accepts `schemaVersion: 1` or `2`, normalizes v1 before
+  additive merge/relationship validation, and ignores imported revisions in
+  favor of the local transaction revision. Registry seed JSON and comparison-
+  analysis JSON are explicitly rejected from telemetry import.
+- Raw dataset export reads the main-owned snapshot and always emits schema v2.
+  Comparison export is a distinct derived artifact with
+  `kind: "pennytel-comparison"` and is not importable. Slice 5 adds bounded
+  filter context and shared analytics to that derived artifact without
+  changing raw dataset import/export semantics.
+- `sourceLog.contentHash` is validated as a SHA-256 representation of exact
+  external source-file bytes; PennyTel neither reads external logs nor stores
+  raw JSONL, prompts, instructions, reasoning, source excerpts, tool commands,
+  tool output, or arbitrary message text in the normal dataset.
 - [`src/shared/comparison-plan.ts`](src/shared/comparison-plan.ts) validates and
   executes declarative comparison plans against one loaded dataset snapshot;
   [`src/main/comparison-plan.ts`](src/main/comparison-plan.ts) owns the
@@ -349,11 +373,16 @@ The bundled seed is statically imported by `src/main/store.ts` from
   options so collision-safe labels remain stable through filtering and export.
 - [`src/renderer/src/pages/Data.tsx`](src/renderer/src/pages/Data.tsx) shows
   the storage path, exports raw JSON, accepts pasted/file JSON, previews counts
-  and skips, and commits only after the user confirms.
+  and skips, and commits only after the user confirms. It presents the v2
+  import contract while explaining automatic v1 normalization and v2 raw
+  exports.
 - [`src/renderer/src/components/RecordEditor.tsx`](src/renderer/src/components/RecordEditor.tsx)
   is the generic field-driven editor for all five tables. It keeps drafts
   local, validates before save, preserves failed drafts, and requires explicit
-  discard for dirty forms.
+  discard for dirty forms. Run records additionally expose an optional
+  normalized execution-evidence JSON section; blank clears the relationship to
+  Unknown, ordinary edits preserve it, and evidence edits use the same main
+  validation/persistence path without changing the pricing snapshot.
 - [`src/renderer/src/components/AcceptanceTime.tsx`](src/renderer/src/components/AcceptanceTime.tsx)
   handles local date/time conversion, exact ISO-with-timezone correction,
   daylight-saving ambiguity/nonexistence feedback, clear, and one-time
@@ -374,7 +403,7 @@ The bundled seed is statically imported by `src/main/store.ts` from
 - [`src/renderer/src/App.tsx`](src/renderer/src/App.tsx) and the main-process
   package metadata share the `package.json` version source; the sidebar/header
   display and `comparisonExport()` app metadata therefore remain aligned at
-  version `0.1.5` for the accepted comparison-plan product candidate.
+  version `0.2.0` for the accepted schema-v2 product candidate.
 
 ## Tests by architectural area
 
@@ -384,9 +413,10 @@ under `tests/**/*.test.{ts,tsx}`.
 | Area | Primary tests | What they cover |
 | --- | --- | --- |
 | Deterministic metrics | [`tests/metrics.test.ts`](tests/metrics.test.ts), [`tests/presentation.test.ts`](tests/presentation.test.ts) | Cost, cached input, reasoning, unknown/zero/partial data, time, acceptance, roles, burn/reset, cache ratios, autonomous credit, dates and quality display |
-| Dataset validation and transactions | [`tests/data.test.ts`](tests/data.test.ts) | v1 shape, enums/bounds, relationships, stale revisions, snapshot immutability/reselection, protected deletion, additive import, conflicts and malformed/oversized input |
+| Dataset validation and transactions | [`tests/data.test.ts`](tests/data.test.ts) | Canonical v2 shape, v1/v2 normalization and import, enums/bounds, relationships, stale revisions, snapshot immutability/reselection, protected deletion, additive import, conflicts and malformed/oversized input |
+| Execution evidence contract | [`tests/execution-evidence.test.ts`](tests/execution-evidence.test.ts), [`tests/execution-evidence-fixture.json`](tests/execution-evidence-fixture.json) | Deterministic v1 migration, v2 round-trip, strict nested bounds/unknown-field and privacy rejection, omitted/partial/zero evidence, provenance IDs/hash handling, token semantics, quota attribution isolation, malformed timestamp/number/count/percentage rejection, and price/relationship/revision preservation |
 | Registry contract and pricing authority | [`tests/registry.test.ts`](tests/registry.test.ts), [`tests/registry-fixtures.ts`](tests/registry-fixtures.ts) | Canonical seed, strict registry validation, identity ambiguity, dated/exclusive pricing, backfill, v1 portability, legacy migration/precedence, referenced identity retention |
-| Durable storage and recovery | [`tests/store.test.ts`](tests/store.test.ts), [`tests/registry-store.test.ts`](tests/registry-store.test.ts) | New/existing profiles, live/backup recovery evidence, external changes, atomic replacement failure, serialized/stale writers, registry startup and persisted backfill |
+| Durable storage and recovery | [`tests/store.test.ts`](tests/store.test.ts), [`tests/registry-store.test.ts`](tests/registry-store.test.ts) | New/existing profiles, strict UTF-8/original-byte preservation, v1 read-without-rewrite and first-mutation migration, live/backup recovery evidence, external changes, atomic replacement failure, serialized/stale writers, registry startup and persisted backfill |
 | Filesystem-safe export | [`tests/export.test.ts`](tests/export.test.ts) | Regular destinations, live/backup aliases, links, dangling/unresolvable identities, raw and comparison output |
 | Configuration identity and comparison | [`tests/configuration.test.ts`](tests/configuration.test.ts), [`tests/configuration-fixtures.ts`](tests/configuration-fixtures.ts), [`tests/comparison.test.ts`](tests/comparison.test.ts) | Canonical/alias identity, recorded thinking and Unknown behavior, ExtraHigh/XHigh presentation, collision-safe labels and bounded derived requests, multi-candidate/stage selection, grouping/filtering/export, raw import and historical cost/snapshot stability |
 | Comparison calculations/export | [`tests/comparison.test.ts`](tests/comparison.test.ts) | Cohort qualification, ORed stage scopes, full lifecycle retention, source and derived filters/grouping/order/selection, candidate evidence coverage, quality, unknown/zero/partial measurements, stale/untrusted export requests |
@@ -394,7 +424,7 @@ under `tests/**/*.test.{ts,tsx}`.
 | Descriptive analytics | [`tests/analytics.test.ts`](tests/analytics.test.ts) | Known/unknown distributions, median/spread, cost-component reconciliation, reasoning share, UTC temporal grouping, date/provider/offer/runtime/outcome filters, accepted aggregate coverage, source IDs, and non-importable export stability |
 | Accepted-outcome economics | [`tests/accepted-outcome.test.ts`](tests/accepted-outcome.test.ts), [`tests/accepted-outcome-fixture.json`](tests/accepted-outcome-fixture.json) | Multi-stage/cross-model lifecycle economics, first-pass Yes/No/Unknown, repair-link deduplication, partial/zero evidence, frozen pricing, reasoning coverage, export and raw-data stability |
 | Renderer comparison and analytics | [`tests/compare-ui.test.tsx`](tests/compare-ui.test.tsx), [`tests/analytics-ui.test.tsx`](tests/analytics-ui.test.tsx) | Shared cohort context, 2+/3+ configuration selection, exact stage controls, date/outcome/Unknown filters, collision labels, keyed export payload, source-linked charts, export failure state, canonical version display across pages |
-| Renderer editors/startup | [`tests/editor.test.tsx`](tests/editor.test.tsx) | Acceptance editing, local/exact timestamps, drafts, failed saves, unknown booleans, discard, same-slice relationship choices, startup failure |
+| Renderer editors/startup | [`tests/editor.test.tsx`](tests/editor.test.tsx) | Execution-evidence preservation/validation/clearing, acceptance editing, local/exact timestamps, drafts, failed saves, unknown booleans, discard, same-slice relationship choices, startup failure |
 | Renderer registry | [`tests/registry-ui.test.tsx`](tests/registry-ui.test.tsx) | Metadata/benchmark display, invalid-update rejection, editable failed draft, preview/install handoff |
 
 Fixtures live in [`tests/fixtures.ts`](tests/fixtures.ts) and
@@ -426,7 +456,8 @@ scripts exercise the real main/preload/renderer/filesystem path.
   [`scripts/electron-configuration-qa.mjs`](scripts/electron-configuration-qa.mjs),
   [`scripts/electron-accepted-outcome-qa.mjs`](scripts/electron-accepted-outcome-qa.mjs),
   and [`scripts/electron-comparison-plan-qa.mjs`](scripts/electron-comparison-plan-qa.mjs),
-  which invokes [`scripts/electron-analytics-qa.mjs`](scripts/electron-analytics-qa.mjs).
+  which invokes [`scripts/electron-analytics-qa.mjs`](scripts/electron-analytics-qa.mjs),
+  followed by [`scripts/electron-execution-evidence-qa.mjs`](scripts/electron-execution-evidence-qa.mjs).
   They use Playwright's Electron driver, isolated temporary
   `test-results/electron-qa-*`/repair/new-profile/registry/configuration-runtime-*
   profiles, real IPC,
@@ -449,6 +480,12 @@ scripts exercise the real main/preload/renderer/filesystem path.
   plan, verify ordered result identities and shared source revision, confirm
   ordinary comparison export remains distinct, and check the plan-result
   artifact's non-importable boundary.
+- [`scripts/electron-execution-evidence-qa.mjs`](scripts/electron-execution-evidence-qa.mjs)
+  uses isolated profiles and the real Electron path to verify v1 load without
+  rewrite, first-mutation v2 migration with exact-byte backup, v2 raw
+  export/import, additive child compatibility, run-editor evidence edits and
+  clearing, strict privacy/quota validation without publication, restart
+  persistence, and malformed UTF-8 preservation/blocking.
 - `electron-analytics-qa.mjs` is the Slice 5 runtime analytics helper. Against
   that isolated profile it verifies descriptive distributions and coverage,
   source-linked charts, UTC date trends, missing-versus-literal-Unknown
@@ -479,6 +516,25 @@ scripts exercise the real main/preload/renderer/filesystem path.
   live data and recovery evidence are preserved on invalid/corrupt/failed
   operations. External live or backup changes fail closed before backup
   rotation or cached-state publication.
+- The canonical raw dataset is schema v2. `normalizeDataset()` is detached
+  and deterministic: v1 reads/imports become in-memory v2 without rewriting
+  storage, and only the first ordinary mutation publishes v2 while preserving
+  the exact original v1 live bytes in the backup rotation.
+- `Run.executionEvidence` is optional normalized source evidence, not a second
+  run identity or a source of PennyOS workflow labels. Session/turn IDs and
+  source hashes are provenance; table record IDs remain the import/conflict
+  identity. Unknown or partial evidence stays unknown, and explicit zeroes
+  remain observed zeroes.
+- Codex quota-window `usedPercent` and attribution belong only to structured
+  execution evidence. They must not be mapped to the legacy
+  `usageBefore`/`usageAfter` remaining-percent meter, `usageBurn`, pricing, or
+  per-run burn analytics. Attribution is recorded explicitly and is never
+  inferred from endpoint differences or timestamps.
+- The normal dataset stores normalized metrics/provenance only. Raw source
+  logs and payloads—including prompts, system instructions, hidden reasoning,
+  source excerpts, commands, tool output, and arbitrary message text—remain
+  outside PennyTel; the source-log hash describes exact external bytes and is
+  not fetched or recomputed by the app.
 - Registry installation/update plus legacy reconciliation, stable identity
   attachment, and eligible backfill are one atomic dataset transaction.
 - Existing `priceSnapshot` evidence is historical and immutable across catalog,
@@ -520,12 +576,14 @@ scripts exercise the real main/preload/renderer/filesystem path.
 - New telemetry ingestion should enter through the typed `Mutation` union and
   `applyMutation`/`mergeImport`, with `validateRecord`/`validateDataset` and
   `TelemetryStore.mutate` remaining the transaction gates.
-- A schema/evidence extension should keep the shared contract in
-  `src/shared/types.ts` and the strict runtime gates in `src/shared/data.ts`,
-  preserving the main-owned load/mutate/preview/export flow. Nested objects
-  currently use explicit validation in `data.ts` (as with `priceSnapshot`),
-  while `fields.ts` is the editor/catalog extension point for flat record
-  fields.
+- The schema-v2 execution-evidence contract is split deliberately:
+  `src/shared/types.ts` relates optional evidence to `Run`,
+  `src/shared/execution-evidence.ts` owns its nested types and strict
+  validation, `src/shared/data.ts` admits it as a run exception and owns the
+  detached v1 normalization/import gates, and `RecordEditor.tsx` is the
+  operator JSON edit surface. Preserve the main-owned load/mutate/preview/
+  export flow; `fields.ts` remains the editor/catalog extension point for flat
+  record fields.
 - Registry evolution should use the complete JSON parse/validate/update path
   in `src/shared/registry.ts` and `registry-import`; referenced IDs and frozen
   snapshot provenance constrain replacement documents.
@@ -570,10 +628,10 @@ scripts exercise the real main/preload/renderer/filesystem path.
 - There is no production dataset, network price fetch, model execution, cloud
   or Sheet synchronization, or statistical-significance machinery in this
   repository. Unknown telemetry is intentionally not reconstructed.
-- The accepted `0.1.5` source schema is still v1: no normalized execution-source
-  evidence object, v1-to-v2 migration routine, or source-log adapter exists in
-  the current baseline. The only implemented ingestion format is local JSON;
-  raw Codex logs are not parsed by PennyTel.
+- The v2 contract still has no raw Codex JSONL parser or external source-log
+  adapter in PennyTel. External tooling must supply normalized evidence through
+  the local JSON import seam; PennyTel validates source-log provenance fields
+  but does not fetch, hash, or retain the external log.
 - The authoritative behavioral contract for any future slice remains its
   assigned GitHub Issue. Begin slice-specific source discovery from the Issue's
   companion context map. Use this index only when broader repository geography
