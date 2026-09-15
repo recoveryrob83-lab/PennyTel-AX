@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
 import { RecordEditor } from '../src/renderer/src/components/RecordEditor'
-import { fixture } from './fixtures'
+import { evidenceFixture, fixture } from './fixtures'
 import App from '../src/renderer/src/App'
 import { localTimestamp } from '../src/shared/acceptance-time'
 
@@ -21,6 +21,59 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 describe('record editor behavior', () => {
+  it('preserves nested evidence on ordinary edits and validates deliberate corrections without losing failed drafts', async () => {
+    const data = fixture()
+    data.runs[0].executionEvidence = evidenceFixture()
+    const onSave = vi.fn().mockResolvedValue(undefined)
+    const onClose = vi.fn()
+    render(
+      <RecordEditor
+        target={{ table: 'runs', record: data.runs[0] }}
+        data={data}
+        onSave={onSave}
+        onClose={onClose}
+      />
+    )
+    fireEvent.change(screen.getByLabelText('Input tokens (fresh / noncached)'), {
+      target: { value: '101' }
+    })
+    fireEvent.submit(screen.getByRole('button', { name: 'Save run' }).closest('form')!)
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    expect(onSave.mock.calls[0][1]).toMatchObject({
+      inputTokens: 101,
+      executionEvidence: evidenceFixture()
+    })
+    expect(onSave.mock.calls[0][1]).not.toHaveProperty('priceSnapshot')
+    onClose.mockClear()
+    const input = screen.getByLabelText('Execution evidence JSON')
+    for (const bad of [
+      '{broken',
+      JSON.stringify({ ...evidenceFixture(), toolOutput: 'forbidden' })
+    ]) {
+      fireEvent.change(input, { target: { value: bad } })
+      fireEvent.submit(screen.getByRole('button', { name: 'Save run' }).closest('form')!)
+      await screen.findByRole('alert')
+      expect(input).toHaveValue(bad)
+      expect(onSave).toHaveBeenCalledTimes(1)
+      expect(onClose).not.toHaveBeenCalled()
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('button', { name: 'Keep editing' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+    const corrected = { ...evidenceFixture(), toolCallCount: 0 }
+    fireEvent.change(input, { target: { value: JSON.stringify(corrected) } })
+    onSave.mockRejectedValueOnce(new Error('Stale revision'))
+    fireEvent.submit(screen.getByRole('button', { name: 'Save run' }).closest('form')!)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Stale revision')
+    expect(input).toHaveValue(JSON.stringify(corrected))
+    fireEvent.submit(screen.getByRole('button', { name: 'Save run' }).closest('form')!)
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(3))
+    expect(onSave.mock.calls[2][1].executionEvidence).toEqual(corrected)
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.submit(screen.getByRole('button', { name: 'Save run' }).closest('form')!)
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(4))
+    expect(onSave.mock.calls[3][1]).not.toHaveProperty('executionEvidence')
+  })
   it('edits acceptance in local time and persists canonical ISO without changing judgment fields', async () => {
     const user = userEvent.setup()
     const onSave = vi.fn().mockResolvedValue(undefined)

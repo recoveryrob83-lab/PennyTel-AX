@@ -218,7 +218,7 @@ export const fields: Record<Table, Field[]> = {
       'inputTokens',
       'Input tokens (fresh / noncached)',
       'Tokens & cost',
-      'Codex input tokens are fresh input. Cached input is additional and recorded separately.'
+      'Run input tokens are fresh input. Cached input is additional and recorded separately.'
     ),
     number(
       'cachedInputTokens',

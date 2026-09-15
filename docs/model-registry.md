@@ -4,7 +4,7 @@ The authoritative seed is [PennyTel Model Registry v0.2](PennyTel_Model_Registry
 
 ## Persistence and startup
 
-`Dataset.registry` is an optional v1 envelope extension. Existing schemaVersion 1 telemetry remains valid. The Electron main bundle statically imports the canonical JSON; installed applications need no repository or `docs/` runtime directory. The renderer receives the stored registry through the existing preload API.
+`Dataset.registry` is an optional envelope extension, retained in schema v2. Existing schemaVersion 1 telemetry is normalized to v2 without altering the registry or historical snapshots; the registry's own schema remains version 1. See [dataset migration](data-contract.md#v1-compatibility-and-persistence). The Electron main bundle statically imports the canonical JSON; installed applications need no repository or `docs/` runtime directory. The renderer receives the stored registry through the existing preload API.
 
 On startup, `TelemetryStore.initializeRegistry()` reads and validates the existing dataset. If registry is absent, it performs an ordinary revision-checked `registry-import` transaction: seed, safe legacy reconciliation, stable identity attachment and eligible pricing backfill are saved together to `telemetry.json`. Existing slices, findings, discoveries, pricing records and run evidence remain. An existing profile gets its prior revision in `telemetry.backup.json`. A genuinely new profile's first transaction creates the live file only. Startup advances dataset revision once; the supplied registry revision remains its source revision. Later launches retain the installed registry, including operator updates, without reseeding.
 

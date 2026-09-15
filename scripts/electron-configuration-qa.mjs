@@ -115,7 +115,7 @@ async function launch() {
 try {
   await launch()
   const initial = await page.evaluate(() => window.pennytel.load())
-  assert.deepEqual(initial.data, data)
+  assert.deepEqual(initial.data, { ...data, schemaVersion: 2 })
   await page.getByRole('navigation').getByRole('button', { name: 'Compare', exact: true }).click()
   assert.equal(
     await page.getByLabel('Group runs by', { exact: true }).inputValue(),
@@ -297,7 +297,7 @@ try {
   assert.equal(all.candidates[0].metrics.evidence.numeric.filesChanged.knownTotal, 0)
   assert.equal(all.candidates[0].metrics.usageBurnPercentagePoints.recorded, 1)
   assert.equal(all.candidates[4].metrics.costUSD.knownTotal, null)
-  assert.equal(all.app.version, '0.1.5')
+  assert.equal(all.app.version, '0.2.0')
   await candidate('Implementation (role: Implementer)').check()
   await candidate('Recorded run type: Verification').check()
   const workspacePath = join(directory, 'workspace-scoped.json')
@@ -395,11 +395,14 @@ try {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
   }, rawPath)
   await page.evaluate(() => window.pennytel.exportData())
-  assert.deepEqual(JSON.parse(await readFile(rawPath, 'utf8')), data)
+  assert.deepEqual(JSON.parse(await readFile(rawPath, 'utf8')), { ...data, schemaVersion: 2 })
   assert.equal(await readFile(join(directory, 'telemetry.json'), 'utf8'), originalBytes)
   await app.close()
   await launch()
-  assert.deepEqual((await page.evaluate(() => window.pennytel.load())).data, data)
+  assert.deepEqual((await page.evaluate(() => window.pennytel.load())).data, {
+    ...data,
+    schemaVersion: 2
+  })
   assert.equal(await readFile(join(directory, 'telemetry.json'), 'utf8'), originalBytes)
   await page.getByRole('navigation').getByRole('button', { name: 'Compare', exact: true }).click()
   assert.equal(await page.getByRole('checkbox', { checked: true }).count(), 0)

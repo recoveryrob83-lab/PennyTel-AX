@@ -32,10 +32,15 @@ export function RecordEditor({
         }
   )
   const [values, setValues] = useState(initial)
+  const [initialEvidence] = useState(() =>
+    initial.executionEvidence ? JSON.stringify(initial.executionEvidence, null, 2) : ''
+  )
+  const [evidenceText, setEvidenceText] = useState(initialEvidence)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [discard, setDiscard] = useState(false)
-  const dirty = JSON.stringify(values) !== JSON.stringify(initial)
+  const dirty =
+    JSON.stringify(values) !== JSON.stringify(initial) || evidenceText !== initialEvidence
   const close = (): void => {
     if (busy) return
     if (dirty) setDiscard(true)
@@ -58,10 +63,17 @@ export function RecordEditor({
     try {
       const clean = Object.fromEntries(
         Object.entries(values)
-          .filter(([key]) => key !== 'priceSnapshot')
+          .filter(([key]) => key !== 'priceSnapshot' && key !== 'executionEvidence')
           .map(([key, value]) => [key, typeof value === 'string' ? value.trim() : value])
           .filter(([, value]) => value !== '')
       )
+      if (table === 'runs' && evidenceText.trim()) {
+        try {
+          clean.executionEvidence = JSON.parse(evidenceText)
+        } catch {
+          throw new Error('Execution evidence must be valid JSON. Your draft has been kept.')
+        }
+      }
       validateRecord(table, clean)
       if (!record && data[table].some((row) => row.id === clean.id))
         throw new Error('This record ID already exists. Choose another ID.')
@@ -189,6 +201,32 @@ export function RecordEditor({
                   </div>
                 </details>
               )
+            )}
+            {table === 'runs' && (
+              <details className="form-section">
+                <summary>Execution evidence</summary>
+                <label className="field full" htmlFor="execution-evidence">
+                  Execution evidence JSON
+                  <textarea
+                    id="execution-evidence"
+                    className="json-input"
+                    rows={12}
+                    spellCheck={false}
+                    value={evidenceText}
+                    onChange={(event) => {
+                      setEvidenceText(event.target.value)
+                      setDiscard(false)
+                      setError('')
+                    }}
+                    aria-describedby="execution-evidence-hint"
+                  />
+                </label>
+                <p id="execution-evidence-hint" className="muted">
+                  Optional normalized metrics and provenance. Blank means unknown. Use the
+                  execution-evidence contract in docs/data-contract.md. Keep raw rollout logs,
+                  prompts, reasoning, and tool payloads outside PennyTel.
+                </p>
+              </details>
             )}
           </fieldset>
         </div>

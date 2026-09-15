@@ -166,7 +166,7 @@ describe('comparison plan execution and isolation', () => {
     expect(bundle.kind).toBe('pennytel-comparison-plan-results')
     expect(bundle.resultsFormatVersion).toBe(1)
     expect(bundle.app).toEqual({ name: 'PennyTel', version: '0.1.5' })
-    expect(bundle.source).toEqual({ datasetSchemaVersion: 1, datasetRevision: data.revision })
+    expect(bundle.source).toEqual({ datasetSchemaVersion: 2, datasetRevision: data.revision })
     expect(bundle.generatedAt).toBe(generatedAt)
     expect(bundle.plan).toEqual({
       kind: 'pennytel-comparison-plan',

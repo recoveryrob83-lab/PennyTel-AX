@@ -1,5 +1,6 @@
 import type { ComparisonRequest } from './comparison'
 import type { ModelRegistry } from './registry'
+import type { ExecutionEvidence } from './execution-evidence'
 
 export type Level = 'Low' | 'Medium' | 'High'
 export type Thinking = Level | 'ExtraHigh' | 'Max'
@@ -81,6 +82,7 @@ export interface Run {
   cachedRate?: number
   outputRate?: number
   priceSnapshot?: PriceSnapshot
+  executionEvidence?: ExecutionEvidence
   filesChanged?: number
   implementationAdded?: number
   implementationDeleted?: number
@@ -171,13 +173,13 @@ export interface EntityMap {
 export type Table = keyof EntityMap
 export type Entity = EntityMap[Table]
 export type Dataset = { [K in Table]: EntityMap[K][] } & {
-  schemaVersion: 1
+  schemaVersion: 2
   revision: number
   registry?: ModelRegistry
 }
 export const TABLES: Table[] = ['slices', 'runs', 'findings', 'discoveries', 'pricing']
 export const emptyDataset = (): Dataset => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   revision: 0,
   slices: [],
   runs: [],

@@ -1,14 +1,14 @@
-# PennyTel JSON contract · v1
+# PennyTel JSON contract · v2
 
 [Issue #1](https://github.com/recoveryrob83-lab/PennyTel-AX/issues/1) is the bounded acceptance-repair contract. The [authoritative Sheet](https://docs.google.com/spreadsheets/d/11U6HKqnbNN0NsE-y8CKrg6P4KOXlei0MhQXJaUdD6s4/edit) was read through connected Google Drive/Sheets, including Slices, Runs, Findings, Discoveries, Pricing, and Data Dictionary. See [field reconciliation](schema-reconciliation.md). The Sheet is not a runtime dependency. Code authority: `src/shared/types.ts`, `fields.ts`, `data.ts`, `metrics.ts`, and `comparison.ts`.
 
-Per Issue #1, there is no production dataset and schema v1 is corrected directly without migration. `inputTokens` now means fresh input, `qualityGrade` is numeric 1–5, usage readings are percent remaining, and discovery adoption is a Yes/No/Deferred enum. Old test exports are not a compatible source of telemetry without explicit correction.
+PennyTel 0.2.0 advances the raw dataset to v2 under [Issue #15](https://github.com/recoveryrob83-lab/PennyTel-AX/issues/15). Existing valid v1 datasets remain compatible through explicit deterministic normalization. The earlier Issue #1 corrections still apply: `inputTokens` means fresh input, `qualityGrade` is numeric 1–5, usage readings are percent remaining, and discovery adoption is a Yes/No/Deferred enum. Pre-correction test exports still need explicit correction; migration does not reinterpret old semantics.
 
 ## Envelope and ingestion
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "revision": 0,
   "slices": [],
   "runs": [],
@@ -18,7 +18,15 @@ Per Issue #1, there is no production dataset and schema v1 is corrected directly
 }
 ```
 
-Exports always contain all arrays and the installed optional `registry` object. The [Model Registry contract](model-registry.md) defines this backward-compatible v1 extension, validated registry import/update, stable run IDs and migration precedence. Imports require `schemaVersion: 1` and may omit empty arrays and revision. Imported revisions are ignored; local revision increments on a successful transaction. Records have stable string IDs unique within their table (1–200 characters, no surrounding whitespace). Unknown fields, null, blank strings, invalid enum values, nonfinite/negative numbers, duplicate IDs within a batch, and missing/cross-slice references are rejected. Optional fields should be omitted when unknown. String fields are limited to 100,000 characters; imports to 10 MB.
+Exports always emit schema v2, all arrays, and the installed optional `registry` object. The [Model Registry contract](model-registry.md) defines validated registry import/update, stable run IDs and pricing precedence; the registry's own schema version remains 1. Imports accept `schemaVersion: 1` or `2` and may omit empty arrays and revision. Imported revisions are ignored; local revision increments on a successful transaction. Records have stable string IDs unique within their table (1–200 characters, no surrounding whitespace). Unknown fields, null, blank strings, invalid enum values, nonfinite/negative numbers, duplicate IDs within a batch, and missing/cross-slice references are rejected. Optional fields should be omitted when unknown. Existing flat string fields are limited to 100,000 characters; execution metadata has tighter bounds below. Imports remain limited to 10 MB.
+
+### V1 compatibility and persistence
+
+`normalizeDataset()` validates the original version's envelope and records, returns a detached schema-v2 dataset, and validates relationships. For v1, the only migration change is `schemaVersion: 1 → 2`: revision, IDs, links, registry, historical price snapshots, all existing values and all omissions are preserved exactly. V1 cannot contain the new `executionEvidence` property. Unsupported versions and invalid historical data fail safely. `validateDataset()` validates canonical v2 only; callers handling external historical data must normalize first.
+
+Loading v1 does not rewrite the live file, create a backup, increment revision, backfill pricing, or fabricate execution evidence. Main retains the original live bytes for provenance checks. The next ordinary mutation writes v2 and backs up the exact previous live bytes, including its original schema version. Existing registry startup behavior is separate: a missing registry still triggers the established guarded registry-install transaction and its normal backfill. A profile with a registry needs no startup write. Failed mutations retain live bytes, authoritative memory and revision; failed live replacement may rotate the backup to the exact previous live bytes, as before.
+
+V1 import batches use the same envelope/record normalization before merging, with relationships validated against combined stored/imported rows. Normal import snapshot attachment and registry backfill still apply; migration itself never reselects historical prices. Source hashes/session/turn IDs are provenance, not alternate record identity: only table IDs control additive merge/conflicts. Multiple turns may share one source file/hash. There is no silent hash-based dropping of runs.
 
 Import merges all arrays as one transaction. A child may refer to a parent already stored or supplied in the same batch. Identical records are skipped by value, independent of JSON key order. Conflicting existing IDs reject the entire import. Use the record editor for corrections; imports never overwrite stored history. Reimporting an exported dataset is idempotent. Raw batches that omit subsequently attached price snapshots may conflict with their stored versions; use the current export when retrying such records.
 
@@ -26,7 +34,7 @@ Synthetic minimal example (illustration only; not real telemetry):
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "slices": [{ "id": "example-slice", "title": "Example work" }],
   "runs": [
     {
@@ -103,6 +111,59 @@ cost = (inputTokens * inputRate
 All three token counts and a snapshot are needed for complete cost. Calculations retain JS number precision; dollar display rounds to at most four decimals. Dates use calendar validation; timestamps must include `Z` or an explicit offset. A pricing effective date starts at midnight UTC.
 
 Cache ratio is `cachedInputTokens / (inputTokens + cachedInputTokens)` when both counts are known and their sum is nonzero. Aggregate ratios use the sum of known cached tokens over the sum of fresh plus cached input for the same eligible runs. Normal UI timestamp displays are locale-aware with a timezone label; saved/exported values stay ISO. Calendar-only dates stay on their original calendar day.
+
+### Structured execution evidence (v2)
+
+`Run.executionEvidence` is optional. The currently supported source is `kind: "codex-rollout"`, `formatVersion: 1`. These two discriminators are required when the object is present. The evidence format version is independent of the dataset, registry, and CLI/runtime versions. Other kinds/versions require an explicit future contract change; they are rejected today. Every other property is optional and must be omitted when unobserved. An absent object, partial object or empty quota array does not establish zero activity or complete observation coverage. Explicit numerical zero means an observed zero.
+
+All nested objects reject unknown properties, nulls and invalid types. Metadata strings must be nonempty, have no surrounding whitespace or control/format characters, and fit the limits below. No catch-all metadata/payload property exists. Counts are finite nonnegative safe integers (maximum `Number.MAX_SAFE_INTEGER`); window sizes/lengths are positive safe integers. TTFT may be fractional, finite, nonnegative and no greater than `Number.MAX_SAFE_INTEGER`.
+
+| Property                                | Contract                                                                                                                                                                                                                                                                                                                            |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sourceLog`                             | Optional object; required `fileName` is a basename (1–255 characters, no `/` or `\`, not `.` or `..`). The raw log remains external.                                                                                                                                                                                                |
+| `sourceLog.contentHash`                 | Optional object with required `algorithm: "sha256"` and `value`: exactly 64 lowercase hexadecimal characters. Hash exact source-file bytes, without decoding, newline normalization, redaction, or JSON reserialization. Never guess a digest. PennyTel validates representation; it does not read/hash/verify external logs.       |
+| `sessionId`, `turnId`                   | Recorded source IDs, 1–200 characters without any whitespace; preserved verbatim, not required to be UUIDs and not used as run IDs automatically.                                                                                                                                                                                   |
+| `runtimeVersion`                        | Recorded Codex CLI/runtime version, at most 100 characters.                                                                                                                                                                                                                                                                         |
+| `originator`                            | Recorded source/originator identifier, at most 200 characters.                                                                                                                                                                                                                                                                      |
+| `workingDirectory`                      | Recorded path, at most 4096 characters; inert metadata, never opened or used for filesystem authority.                                                                                                                                                                                                                              |
+| `repository`                            | Optional object with optional `url` (2048 characters), `branch` (255), `baselineCommitSha` (full 40- or 64-character lowercase hex commit ID). No URL is fetched; omit credentials or sensitive URL components. No local HEAD/branch inference.                                                                                     |
+| `timeToFirstTokenMs`                    | Observed latency in milliseconds. Omit if source boundaries cannot establish it.                                                                                                                                                                                                                                                    |
+| `modelInvocationCount`, `toolCallCount` | Observed normalized counts for the run's identified execution scope. Missing events/uncertain scope must not become a fabricated complete count.                                                                                                                                                                                    |
+| `modelContextWindowTokens`              | Recorded model context-window size. Never derive it from model naming.                                                                                                                                                                                                                                                              |
+| `peakInvocation`                        | Optional object with required `inputTokens`: maximum observed input/context occupancy for an invocation, **including cached input**. Optional `cachedInputTokens` is a subset and cannot exceed that input. Optional `contextWindowTokens` is the window recorded for that same peak invocation. No raw invocation trace is stored. |
+| `quotaWindows`                          | Optional array of at most 16 coarse window observations, as defined below.                                                                                                                                                                                                                                                          |
+| `environment`                           | Optional recorded execution constraints, as defined below.                                                                                                                                                                                                                                                                          |
+
+Peak context utilization, if needed by a future consumer, is `peakInvocation.inputTokens / peakInvocation.contextWindowTokens` only when both are known for the same invocation. Do not substitute the top-level model window when its association is unknown, use cumulative run token totals, or add cached input again. A changed window size can mean the maximum occupancy invocation is not the maximum utilization invocation; this contract does not claim otherwise. Counts beyond a recorded window are retained as observed evidence rather than clamped; no utilization percentage is stored or guessed. Unknown sampling coverage does not imply a whole-session maximum.
+
+Each `quotaWindows` entry has required `attribution: "Clean" | "Contaminated" | "Unknown"`, plus optional:
+
+- `windowName`: recorded identifier (100 characters).
+- `windowMinutes`: observed window length, positive safe integer minutes.
+- `planType`: recorded plan identifier (100 characters).
+- `first` / `last`: first/last observed reading objects. Each requires `usedPercent` (finite number 0–100, fractions allowed), with optional `recordedAt` and `resetsAt` ISO timestamps including timezone. Each endpoint keeps its own observed reset boundary, so replenishment or a reset change is representable. Calendar/time rollover, invalid offsets and missing zones are rejected; milliseconds support 1–3 decimal digits. If both reading times exist, last cannot precede first. A lone endpoint is partial evidence.
+- `note`: concise attribution reason (500 characters); never a pasted source message or tool output.
+
+`Clean` means explicit evidence supports attribution of these coarse readings to the identified execution scope; `Contaminated` records known other activity; `Unknown` means attribution has not been established. Attribution must be supplied, never inferred by PennyTel from timestamps or endpoint differences. Even `Clean` does not automatically establish per-run burn. Endpoint decreases/reset changes remain representable. Quota `usedPercent` is not remaining percent and is never mapped to `usageBefore`, `usageAfter`, `usageBurn`, pricing, or analytics.
+
+`environment` accepts only these optional recorded values:
+
+- `sandboxMode`: `read-only`, `workspace-write`, `danger-full-access`, `external-sandbox`, `unknown`.
+- `approvalPolicy`: `untrusted`, `on-failure`, `on-request`, `never`, `unknown`.
+- `approvalReviewer`: `user`, `auto_review`, `unknown`.
+- `networkAccess`: `enabled`, `restricted`, `disabled`, `unknown`.
+
+These describe source execution constraints; they grant no permissions to PennyTel. Omit unavailable state. A literal `unknown` is supported when explicitly recorded. Unrecognized future source values require contract reconciliation, not arbitrary strings or inferred capabilities.
+
+The run editor's **Execution evidence** section accepts/inspects this normalized JSON, validates corrections through the existing save path, preserves failed drafts, and allows intentional clearing to Unknown. Ordinary run edits preserve evidence. An evidence-only edit preserves the saved pricing snapshot. No dedicated analytics or parsing UI is introduced.
+
+#### Privacy and semantic authority
+
+The accepted schema contains no prompt, AGENTS/system instructions, hidden/encrypted reasoning, source excerpts, tool commands/output, arbitrary messages, raw JSONL, or per-invocation trace fields. Unknown payload keys are rejected at every nested level. Do not hide payloads or secrets in permitted metadata/note fields; bounded string validation cannot determine a string's real-world meaning. The adapter is responsible for supplying only observed normalized metrics/provenance, with raw logs remaining external.
+
+`sliceId`, `runType`, `role`, `result`, and `contextMode` remain explicit operator/orchestrator metadata on the run. Source session/turn/repository identity must never manufacture those labels. Run input remains fresh input plus separately counted additional cached input; output includes reasoning and reasoning is never billed twice. `peakInvocation.inputTokens` deliberately has the different, cache-inclusive occupancy definition above.
+
+The complete [synthetic evidence fixture](../tests/execution-evidence-fixture.json) illustrates the accepted shape; its IDs, digest, repository, measurements and environment are test data, not real source telemetry.
 
 ## Finding fields
 

@@ -1,8 +1,9 @@
 import { lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { TextDecoder } from 'node:util'
 import canonicalRegistry from '../../docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json'
-import { applyMutation, mergeImport, validateDataset } from '../shared/data'
+import { applyMutation, mergeImport, normalizeDataset } from '../shared/data'
 import {
   emptyDataset,
   type Dataset,
@@ -14,7 +15,7 @@ import {
 export class TelemetryStore {
   readonly path: string
   private data?: Dataset
-  private liveContents?: string
+  private liveContents?: Buffer
   private backupState?: string
   private initializing?: Promise<LoadedData>
   private awaitingFirstWrite = false
@@ -64,9 +65,9 @@ export class TelemetryStore {
     }
   }
   private async readFromDisk(): Promise<Dataset> {
-    let contents: string
+    let contents: Buffer
     try {
-      contents = await readFile(this.path, 'utf8')
+      contents = await readFile(this.path)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         await this.requireNewProfile()
@@ -77,8 +78,8 @@ export class TelemetryStore {
       throw new Error(`Cannot read ${this.path}: ${(error as Error).message}`)
     }
     try {
-      const parsed: unknown = JSON.parse(contents)
-      validateDataset(parsed)
+      const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(contents)
+      const parsed = normalizeDataset(JSON.parse(text))
       this.backupState = await this.readBackupState()
       this.liveContents = contents
       this.data = parsed
@@ -116,7 +117,7 @@ export class TelemetryStore {
   async preview(text: string): Promise<ImportPreview> {
     return mergeImport(await this.read(), text).preview
   }
-  private async atomicWrite(path: string, contents: string): Promise<void> {
+  private async atomicWrite(path: string, contents: string | Buffer): Promise<void> {
     const temporary = `${path}.${randomUUID()}.tmp`
     const handle = await open(temporary, 'wx', 0o600)
     try {
@@ -140,9 +141,9 @@ export class TelemetryStore {
       if (this.awaitingFirstWrite) await this.requireNewProfile(true)
       // Recheck before rotating the backup, including after an earlier empty load.
       // Never replace recovery evidence using stale cached state.
-      let live: string | undefined
+      let live: Buffer | undefined
       try {
-        live = await readFile(this.path, 'utf8')
+        live = await readFile(this.path)
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
         await this.requireNewProfile()
@@ -151,7 +152,7 @@ export class TelemetryStore {
             'Live dataset disappeared. Files preserved; close PennyTel and restore it.'
           )
       }
-      if (live !== undefined && live !== this.liveContents)
+      if (live !== undefined && (!this.liveContents || !live.equals(this.liveContents)))
         throw new Error(
           'Live dataset changed outside PennyTel. Files preserved; close and reopen PennyTel.'
         )
@@ -161,15 +162,12 @@ export class TelemetryStore {
         )
       await mkdir(this.directory, { recursive: true, mode: 0o700 })
       if (live !== undefined) {
-        await this.atomicWrite(
-          join(this.directory, 'telemetry.backup.json'),
-          JSON.stringify(previous, null, 2)
-        )
+        await this.atomicWrite(join(this.directory, 'telemetry.backup.json'), live)
         // Track our own rotation even if the following live replacement fails.
         this.backupState = await this.readBackupState()
       }
       await this.atomicWrite(this.path, JSON.stringify(next, null, 2))
-      this.liveContents = JSON.stringify(next, null, 2)
+      this.liveContents = Buffer.from(JSON.stringify(next, null, 2), 'utf8')
       this.awaitingFirstWrite = false
       this.data = next
       return this.load()

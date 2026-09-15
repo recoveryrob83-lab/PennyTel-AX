@@ -72,7 +72,7 @@ export async function verifyAnalytics(app, page, directory) {
   await page.getByRole('button', { name: 'Export comparison', exact: true }).click()
   await page.getByRole('status').filter({ hasText: path }).waitFor()
   const exported = JSON.parse(await readFile(path, 'utf8'))
-  assert.equal(exported.app.version, '0.1.5')
+  assert.equal(exported.app.version, '0.2.0')
   assert.equal(exported.context.filters.offerId, null)
   assert.deepEqual(exported.context.dateRange, {
     from: '2026-09-11T00:00:00.000Z',

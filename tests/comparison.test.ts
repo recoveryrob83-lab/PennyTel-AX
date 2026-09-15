@@ -188,7 +188,7 @@ describe('real comparison workspace', () => {
       'not importable telemetry'
     )
     expect(mergeImport(emptyDataset(), bytes).data.runs).toEqual(data.runs)
-    expect(output.app.version).toBe('0.1.5')
+    expect(output.app.version).toBe('0.2.0')
   })
   it('keeps empty candidates and partially priced/timed/cache/meter measurements honest', () => {
     const data = configurationFixture()
@@ -387,7 +387,7 @@ describe('bounded comparison and non-importable analysis export', () => {
     )
     expect(output.kind).toBe('pennytel-comparison')
     expect(output.analysisFormatVersion).toBe(1)
-    expect(output.source).toEqual({ datasetSchemaVersion: 1, datasetRevision: 0 })
+    expect(output.source).toEqual({ datasetSchemaVersion: 2, datasetRevision: 0 })
     expect(output.generatedAt).toBe(generatedAt)
     expect(output.app.version).toBe('0.1.0')
     expect(output.context).toMatchObject(context)

@@ -1,4 +1,5 @@
 import { fields } from './fields'
+import { validateExecutionEvidence } from './execution-evidence'
 import { applicablePrice } from './metrics'
 import {
   backfillRegistry,
@@ -54,7 +55,7 @@ export function validateRecord(table: Table, value: unknown): asserts value is E
   const prefix = `${table} ${String(value.id ?? '(new)')}`
   const allowed = new Set([
     ...fields[table].map((f) => f.key),
-    ...(table === 'runs' ? ['priceSnapshot'] : [])
+    ...(table === 'runs' ? ['priceSnapshot', 'executionEvidence'] : [])
   ])
   for (const key of Object.keys(value))
     if (!allowed.has(key)) fail(`${prefix}: unknown field “${key}”. Check the import contract.`)
@@ -93,6 +94,8 @@ export function validateRecord(table: Table, value: unknown): asserts value is E
     fail(`${prefix}: ID must have no surrounding spaces and be at most 200 characters.`)
   if (table === 'runs') {
     const run = value as unknown as Run
+    if (run.executionEvidence !== undefined)
+      validateExecutionEvidence(run.executionEvidence, `${prefix}.executionEvidence`)
     for (const key of ['modelId', 'providerId'] as const) {
       const id = run[key]
       if (id !== undefined && (id.trim() !== id || id.length > 200))
@@ -192,14 +195,19 @@ export function validateRecord(table: Table, value: unknown): asserts value is E
     }
   }
 }
-export function validateDataset(value: unknown): asserts value is Dataset {
+function validateEnvelope(
+  value: unknown,
+  version: 1 | 2
+): asserts value is Record<string, unknown> {
   if (
     !object(value) ||
-    value.schemaVersion !== 1 ||
+    value.schemaVersion !== version ||
     !Number.isSafeInteger(value.revision) ||
     (value.revision as number) < 0
   )
-    fail('Unsupported dataset. Expected schemaVersion 1 and a nonnegative integer revision.')
+    fail(
+      `Unsupported dataset. Expected schemaVersion ${version} and a nonnegative integer revision.`
+    )
   if (
     Object.keys(value).some(
       (k) => !['schemaVersion', 'revision', 'registry', ...TABLES].includes(k)
@@ -211,11 +219,36 @@ export function validateDataset(value: unknown): asserts value is Dataset {
     if (!Array.isArray(value[table])) fail(`Dataset must contain a ${table} array.`)
     const ids = new Set<string>()
     for (const row of value[table] as unknown[]) {
+      if (
+        version === 1 &&
+        table === 'runs' &&
+        object(row) &&
+        Object.hasOwn(row, 'executionEvidence')
+      )
+        fail('Schema v1 runs cannot contain executionEvidence. Use schemaVersion 2.')
       validateRecord(table, row)
       if (ids.has(row.id)) fail(`${table}: duplicate ID “${row.id}”.`)
       ids.add(row.id)
     }
   }
+}
+
+/** Normalize the envelope/records before checking relationships against stored + imported rows. */
+function normalizeEnvelope(value: unknown): Dataset {
+  const version = object(value) && value.schemaVersion === 1 ? 1 : 2
+  validateEnvelope(value, version)
+  return { ...structuredClone(value), schemaVersion: 2 } as Dataset
+}
+
+/** Explicit, detached v1 compatibility path. No backfill, new evidence, revision change, or I/O. */
+export function normalizeDataset(value: unknown): Dataset {
+  const data = normalizeEnvelope(value)
+  validateDataset(data)
+  return data
+}
+
+export function validateDataset(value: unknown): asserts value is Dataset {
+  validateEnvelope(value, 2)
   const data = value as unknown as Dataset
   for (const table of ['runs', 'findings', 'discoveries'] as const) {
     for (const row of data[table]) {
@@ -352,8 +385,9 @@ export function mergeImport(
     fail('Comparison plans are executable analysis requests. Use Run comparison plan.')
   if (object(input) && input.kind === 'pennytel-comparison-plan-results')
     fail('Comparison-plan results are derived analysis and cannot be imported as telemetry.')
-  if (!object(input) || input.schemaVersion !== 1) fail('Import requires schemaVersion: 1.')
-  const incoming = { ...emptyDataset(), ...input, revision: 0 }
+  if (!object(input) || ![1, 2].includes(input.schemaVersion as number))
+    fail('Import requires schemaVersion: 1 or 2.')
+  const incoming = normalizeEnvelope({ ...emptyDataset(), ...input, revision: 0 })
   // Check each record first, then relationships against the combined dataset.
   for (const key of Object.keys(incoming))
     if (!['schemaVersion', 'revision', 'registry', ...TABLES].includes(key))

@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from 'vitest'
 import * as fs from 'node:fs/promises'
 import { TelemetryStore } from '../src/main/store'
 import { emptyDataset } from '../src/shared/types'
+import { evidenceFixture, fixture } from './fixtures'
+import { registryFixture } from './registry-fixtures'
+import { writeExport } from '../src/main/export'
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof fs>()
@@ -17,6 +20,180 @@ async function qaDirectory(prefix: string): Promise<string> {
 }
 
 describe('durable local storage', () => {
+  it.each([1, 2])(
+    'preserves exact multibyte live bytes when rotating schema v%i',
+    async (schemaVersion) => {
+      const directory = await qaDirectory('utf8-rotation-')
+      const store = new TelemetryStore(directory)
+      const data = { ...fixture(), schemaVersion }
+      data.slices[0].title = 'Café 日本語 😀 �'
+      const bytes = Buffer.from(JSON.stringify(data, null, '\t') + '\r\n', 'utf8')
+      await writeFile(store.path, bytes)
+      const loaded = (await store.load()).data
+      expect(loaded.slices[0].title).toBe(data.slices[0].title)
+      await store.mutate({
+        kind: 'save',
+        table: 'slices',
+        revision: 0,
+        record: { ...loaded.slices[0], title: 'Updated' }
+      })
+      expect(await readFile(join(directory, 'telemetry.backup.json'))).toEqual(bytes)
+    }
+  )
+  it.each([[0xff], [0xc0, 0xaf], [0xe2, 0x82], [0xed, 0xa0, 0x80]])(
+    'blocks malformed UTF-8 %j without changing live or backup',
+    async (...invalidBytes) => {
+      const directory = await qaDirectory('invalid-utf8-')
+      const store = new TelemetryStore(directory)
+      const bytes = Buffer.concat([
+        Buffer.from('{"schemaVersion":2,"slices":[{"id":"s","title":"'),
+        Buffer.from(invalidBytes),
+        Buffer.from('"}],"revision":0,"runs":[],"findings":[],"discoveries":[],"pricing":[]}')
+      ])
+      const backup = join(directory, 'telemetry.backup.json')
+      const recovery = Buffer.from('recovery evidence')
+      await writeFile(store.path, bytes)
+      await writeFile(backup, recovery)
+      await expect(store.load()).rejects.toThrow('encoded data was not valid')
+      await expect(store.initializeRegistry()).rejects.toThrow('encoded data was not valid')
+      await expect(
+        store.mutate({
+          kind: 'save',
+          table: 'slices',
+          revision: 0,
+          record: { id: 's', title: 'Changed' }
+        })
+      ).rejects.toThrow('encoded data was not valid')
+      expect(await readFile(store.path)).toEqual(bytes)
+      expect(await readFile(backup)).toEqual(recovery)
+    }
+  )
+  it('detects external malformed bytes even when replacement decoding matches cached text', async () => {
+    const directory = await qaDirectory('utf8-provenance-')
+    const store = new TelemetryStore(directory)
+    const data = fixture()
+    data.slices[0].title = '�'
+    const original = Buffer.from(JSON.stringify(data))
+    await writeFile(store.path, original)
+    await store.load()
+    const index = original.indexOf(Buffer.from('�'))
+    const changed = Buffer.concat([
+      original.subarray(0, index),
+      Buffer.from([0xff]),
+      original.subarray(index + 3)
+    ])
+    expect(changed.toString('utf8')).toBe(original.toString('utf8'))
+    await writeFile(store.path, changed)
+    await expect(
+      store.mutate({
+        kind: 'save',
+        table: 'slices',
+        revision: 0,
+        record: { ...data.slices[0], title: 'Changed' }
+      })
+    ).rejects.toThrow('changed outside')
+    expect(await readFile(store.path)).toEqual(changed)
+    expect((await store.load()).data).toEqual(data)
+    await expect(readFile(join(directory, 'telemetry.backup.json'))).rejects.toMatchObject({
+      code: 'ENOENT'
+    })
+  })
+  it('loads/exports v1 as v2 without writes, then persists evidence and preserves exact v1 backup bytes', async () => {
+    const directory = await qaDirectory('v2-migration-')
+    const store = new TelemetryStore(directory)
+    const legacy = { ...fixture(), registry: registryFixture(), schemaVersion: 1, revision: 7 }
+    const bytes = JSON.stringify(legacy) + '\n'
+    await writeFile(store.path, bytes)
+    const data = (await store.initializeRegistry()).data
+    expect(data).toEqual({ ...legacy, schemaVersion: 2 })
+    expect(await readFile(store.path, 'utf8')).toBe(bytes)
+    const backup = join(directory, 'telemetry.backup.json')
+    await expect(readFile(backup)).rejects.toMatchObject({ code: 'ENOENT' })
+    const exported = join(directory, 'raw-export.json')
+    await writeExport(exported, data, [store.path, backup])
+    expect(JSON.parse(await readFile(exported, 'utf8'))).toEqual(data)
+    expect(await readFile(store.path, 'utf8')).toBe(bytes)
+    expect((await store.preview(JSON.stringify(legacy))).skipped).toBe(3)
+    const saved = (
+      await store.mutate({
+        kind: 'save',
+        table: 'runs',
+        revision: 7,
+        record: { ...data.runs[0], executionEvidence: evidenceFixture() }
+      })
+    ).data
+    expect(saved.revision).toBe(8)
+    expect(saved.runs[0].priceSnapshot).toEqual(legacy.runs[0].priceSnapshot)
+    expect(await readFile(backup, 'utf8')).toBe(bytes)
+    expect((await new TelemetryStore(directory).load()).data).toEqual(saved)
+    expect(JSON.parse(await readFile(store.path, 'utf8'))).toEqual(saved)
+    const detached = (await store.load()).data
+    detached.runs[0].executionEvidence!.quotaWindows![0].first!.usedPercent = 99
+    expect((await store.load()).data).toEqual(saved)
+  })
+  it('keeps migration unpublished on invalid writes and failed atomic replacement, then safely retries', async () => {
+    const directory = await qaDirectory('v2-failed-write-')
+    const store = new TelemetryStore(directory)
+    const legacy = { ...fixture(), schemaVersion: 1, revision: 9 }
+    const bytes = JSON.stringify(legacy) + '\n'
+    await writeFile(store.path, bytes)
+    const initial = (await store.load()).data
+    const command = {
+      kind: 'save',
+      table: 'runs',
+      revision: 9,
+      record: { ...initial.runs[0], executionEvidence: evidenceFixture() }
+    } as const
+    await expect(
+      store.mutate({
+        ...command,
+        record: {
+          ...command.record,
+          executionEvidence: { ...evidenceFixture(), toolCallCount: -1 }
+        }
+      })
+    ).rejects.toThrow('toolCallCount')
+    expect(await readFile(store.path, 'utf8')).toBe(bytes)
+    const { rename } = await vi.importActual<typeof fs>('node:fs/promises')
+    const spy = vi.mocked(fs.rename).mockImplementation(async (from, to) => {
+      if (to === store.path) throw new Error('Synthetic v2 rename failure')
+      return rename(from, to)
+    })
+    try {
+      await expect(store.mutate(command)).rejects.toThrow('Synthetic v2 rename failure')
+      expect(await readFile(store.path, 'utf8')).toBe(bytes)
+      expect(await readFile(join(directory, 'telemetry.backup.json'), 'utf8')).toBe(bytes)
+      expect((await store.load()).data).toEqual(initial)
+    } finally {
+      spy.mockImplementation(rename)
+    }
+    const saved = await store.mutate(command)
+    expect(saved.data.schemaVersion).toBe(2)
+    expect(saved.data.revision).toBe(10)
+    await expect(store.mutate(command)).rejects.toThrow('changed')
+    expect(saved.data.runs[0].executionEvidence).toEqual(evidenceFixture())
+  })
+  it('blocks stale external changes even when normalized v1/v2 values are equivalent', async () => {
+    const directory = await qaDirectory('v2-provenance-')
+    const store = new TelemetryStore(directory)
+    const legacy = { ...fixture(), schemaVersion: 1 }
+    await writeFile(store.path, JSON.stringify(legacy))
+    const data = (await store.load()).data
+    const external = JSON.stringify(data)
+    await writeFile(store.path, external)
+    await expect(
+      store.mutate({
+        kind: 'save',
+        table: 'slices',
+        revision: 0,
+        record: { ...data.slices[0], title: 'Must not publish' }
+      })
+    ).rejects.toThrow('changed outside')
+    expect(await readFile(store.path, 'utf8')).toBe(external)
+    await expect(readFile(join(directory, 'telemetry.backup.json'))).rejects.toMatchObject({
+      code: 'ENOENT'
+    })
+  })
   const command = {
     kind: 'save',
     table: 'slices',

@@ -62,7 +62,7 @@ function acceptedOutcomeEvidence(
 ): AcceptedOutcomeEvidence {
   const ids = new Set(lifecycle.map((run) => run.id))
   // Later evaluations stay available in slice findings, but cannot rewrite this acceptance.
-  // Unlinked findings have no timestamp in schema v1 and therefore remain possible evidence.
+  // Unlinked findings have no timestamp and therefore remain possible evidence.
   const relevantFindings = findings.filter((f) => !f.runId || ids.has(f.runId))
   const repairFindings = relevantFindings.filter(
     (f) =>
@@ -1041,7 +1041,7 @@ export function comparisonExport(
       cohort:
         'Slice and accepted-outcome filters select eligible slices. A run must match every active run filter, the run-start date range, and at least one selected stage scope (if any) to qualify its slice. Full relevant lifecycle cost is retained for each qualifying accepted slice.',
       filterUnknowns:
-        'A null filter explicitly selects missing evidence, distinct from false, zero, empty/cleared filters, or literal source text Unknown. Provider text/ID and saved offer ID use recorded fields only. No inferred evidence-class, technical-stack, difficulty/coupling, or context-preparation fields exist in schema v1.',
+        'A null filter explicitly selects missing evidence, distinct from false, zero, empty/cleared filters, or literal source text Unknown. Provider text/ID and saved offer ID use recorded fields only. No inferred evidence-class, technical-stack, difficulty/coupling, or context-preparation fields exist in the telemetry schema.',
       dateRange:
         'Inclusive canonical UTC timestamp bounds apply to run.startAt on the same qualifying run. Undated runs match only when includeUnknown is true. Lifecycle reopening remains independent of these bounds.',
       outcomeFilters:

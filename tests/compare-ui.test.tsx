@@ -274,7 +274,7 @@ describe('comparison UI uses shared cohort context', () => {
   })
 
   it('keeps the canonical package version visible across ordinary pages', async () => {
-    expect(version).toBe('0.1.5')
+    expect(version).toBe('0.2.0')
     const user = userEvent.setup()
     window.pennytel = {
       load: vi.fn().mockResolvedValue({ data: configurationFixture(), path: '/qa/telemetry.json' }),

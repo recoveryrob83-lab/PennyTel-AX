@@ -1,0 +1,56 @@
+{
+  "kind": "codex-rollout",
+  "formatVersion": 1,
+  "sourceLog": {
+    "fileName": "synthetic-rollout.jsonl",
+    "contentHash": {
+      "algorithm": "sha256",
+      "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }
+  },
+  "sessionId": "synthetic-session-1",
+  "turnId": "synthetic-turn-1",
+  "runtimeVersion": "synthetic-1.0",
+  "originator": "synthetic-qa",
+  "workingDirectory": "/synthetic/worktree",
+  "repository": {
+    "url": "https://example.invalid/synthetic/repo.git",
+    "branch": "synthetic-branch",
+    "baselineCommitSha": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "timeToFirstTokenMs": 123.5,
+  "modelInvocationCount": 4,
+  "toolCallCount": 3,
+  "modelContextWindowTokens": 200000,
+  "peakInvocation": {
+    "inputTokens": 90000,
+    "cachedInputTokens": 80000,
+    "contextWindowTokens": 200000
+  },
+  "quotaWindows": [
+    {
+      "windowName": "primary",
+      "windowMinutes": 300,
+      "planType": "synthetic-plan",
+      "first": {
+        "usedPercent": 10.5,
+        "recordedAt": "2026-09-15T10:00:00-05:00",
+        "resetsAt": "2026-09-15T16:00:00Z"
+      },
+      "last": {
+        "usedPercent": 12.5,
+        "recordedAt": "2026-09-15T15:30:00Z",
+        "resetsAt": "2026-09-15T16:00:00Z"
+      },
+      "attribution": "Contaminated",
+      "note": "Synthetic concurrent-session observation"
+    },
+    { "windowName": "secondary", "attribution": "Unknown" }
+  ],
+  "environment": {
+    "sandboxMode": "workspace-write",
+    "approvalPolicy": "on-request",
+    "approvalReviewer": "auto_review",
+    "networkAccess": "restricted"
+  }
+}

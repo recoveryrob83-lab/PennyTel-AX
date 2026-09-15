@@ -117,7 +117,7 @@ export function Data({
               setPreview(undefined)
               setError('')
             }}
-            placeholder={'{ "schemaVersion": 1, "slices": […], "runs": […] }'}
+            placeholder={'{ "schemaVersion": 2, "slices": […], "runs": […] }'}
           />
         </label>
         <p className="footnote">
@@ -169,9 +169,10 @@ export function Data({
       <section className="panel prose">
         <h2>Ingestion seam</h2>
         <p>
-          The v1 JSON contract is the same for backups and batch ingestion. Include schemaVersion: 1
+          The v2 JSON contract is the same for backups and batch ingestion. Include schemaVersion: 2
           and any of the five record arrays. Use stable IDs and camelCase field names. Optional
-          fields must be omitted when unknown; null and blank values are rejected.
+          fields must be omitted when unknown; null and blank values are rejected. Existing v1
+          datasets are normalized automatically; raw exports use v2.
         </p>
         <details>
           <summary>Empty dataset template</summary>

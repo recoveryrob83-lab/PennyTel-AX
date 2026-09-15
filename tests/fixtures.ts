@@ -1,6 +1,13 @@
 // Deliberately synthetic, test-only telemetry. The application never loads fixtures.
 import { emptyDataset, type Dataset, type Run } from '../src/shared/types'
 import { snapshotRun } from '../src/shared/data'
+import evidence from './execution-evidence-fixture.json'
+import { validateExecutionEvidence, type ExecutionEvidence } from '../src/shared/execution-evidence'
+
+export function evidenceFixture(): ExecutionEvidence {
+  validateExecutionEvidence(evidence)
+  return structuredClone(evidence)
+}
 
 export const runFixture = (overrides: Partial<Run> = {}): Run => ({
   id: 'run-test',
