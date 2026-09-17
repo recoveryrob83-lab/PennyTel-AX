@@ -1,15 +1,25 @@
 import { useState } from 'react'
-import { emptyDataset, TABLES, type Dataset, type ImportPreview } from '../../../shared/types'
+import {
+  emptyDataset,
+  TABLES,
+  type Dataset,
+  type BatchPreview,
+  type LoadedData,
+  type ImportPreview
+} from '../../../shared/types'
 
 export function Data({
   data,
   path,
-  onImport
+  onImport,
+  onBatchImported
 }: {
   data: Dataset
   path: string
   onImport: (text: string) => Promise<void>
+  onBatchImported: (result: LoadedData) => void
 }): React.JSX.Element {
+  const [batch, setBatch] = useState<BatchPreview>()
   const [text, setText] = useState('')
   const [preview, setPreview] = useState<ImportPreview>()
   const [error, setError] = useState('')
@@ -163,6 +173,64 @@ export function Data({
             >
               {busy ? 'Importing…' : 'Import records'}
             </button>
+          </div>
+        )}
+      </section>
+      <section className="panel">
+        <h2>Batch telemetry import</h2>
+        <p>
+          Choose a folder to recursively preview .pennytel.json artifacts. Hidden entries and
+          symlinks are ignored. Maximum 1000 files, 10 MB per file, 100 MB total.
+        </p>
+        <button
+          disabled={busy}
+          onClick={() =>
+            run(async () => {
+              setBatch(undefined)
+              const selected = await window.pennytel.openBatchImport()
+              if (selected) setBatch(selected)
+            })
+          }
+        >
+          Choose batch folder
+        </button>
+        {batch && (
+          <div className="import-preview">
+            <h3>Batch ready to add · {batch.fileCount} files</h3>
+            <div className="dataset-counts">
+              {TABLES.map((table) => (
+                <span key={table}>
+                  <strong>{batch.counts[table]}</strong> {table}
+                </span>
+              ))}
+              <span>{batch.skipped} identical records skipped</span>
+            </div>
+            <button
+              className="primary"
+              disabled={busy || batch.revision !== data.revision}
+              onClick={() =>
+                run(async () => {
+                  setBatch(undefined)
+                  let result: LoadedData
+                  try {
+                    result = await window.pennytel.commitBatchImport(batch.token)
+                  } catch (error) {
+                    throw new Error(
+                      `Batch import failed. No records were changed. Select and preview the batch folder again before retrying. ${(error as Error).message}`
+                    )
+                  }
+                  onBatchImported(result)
+                  setMessage(
+                    `Batch saved. ${Object.values(batch.counts).reduce((sum, count) => sum + count, 0)} records imported; ${batch.skipped} identical records skipped.`
+                  )
+                })
+              }
+            >
+              Import batch
+            </button>
+            {batch.revision !== data.revision && (
+              <p role="alert">Dataset changed. Choose and preview the folder again.</p>
+            )}
           </div>
         )}
       </section>

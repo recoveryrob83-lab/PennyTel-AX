@@ -246,6 +246,8 @@ describe('record editor behavior', () => {
     window.pennytel = {
       load: vi.fn().mockRejectedValue(new Error('Dataset corrupt: preserved')),
       mutate: vi.fn(),
+      openBatchImport: vi.fn(),
+      commitBatchImport: vi.fn(),
       previewImport: vi.fn(),
       openImport: vi.fn(),
       exportData: vi.fn(),

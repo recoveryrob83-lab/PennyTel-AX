@@ -162,7 +162,7 @@ export async function verifyEvidenceAnalysis(application, page, directory) {
     return JSON.parse(await readFile(path, 'utf8'))
   }
   const all = await exportUI('evidence-all-comparison.json')
-  assert.equal(all.app.version, '0.2.1')
+  assert.equal(all.app.version, '0.2.2')
   const analytics = all.analytics.executionEvidence
   assert.deepEqual(analytics.sourceKinds, {
     counts: [{ value: 'codex-rollout', count: 4 }],

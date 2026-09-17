@@ -191,6 +191,7 @@ export type Mutation =
   | { kind: 'save'; table: Table; record: Entity; revision: number }
   | { kind: 'delete'; table: Table; id: string; revision: number }
   | { kind: 'import'; text: string; revision: number }
+  | { kind: 'batch-import'; sources: ImportSource[]; revision: number }
   | { kind: 'registry-import'; text: string; revision: number }
 export interface LoadedData {
   data: Dataset
@@ -201,7 +202,18 @@ export interface ImportPreview {
   counts: Record<Table, number>
   skipped: number
 }
+export interface ImportSource {
+  path: string
+  text: string
+}
+export interface BatchPreview extends ImportPreview {
+  token: string
+  fileCount: number
+  revision: number
+}
 export interface PennyTelAPI {
+  openBatchImport: () => Promise<BatchPreview | null>
+  commitBatchImport: (token: string) => Promise<LoadedData>
   load: () => Promise<LoadedData>
   mutate: (command: Mutation) => Promise<LoadedData>
   previewImport: (text: string) => Promise<ImportPreview>

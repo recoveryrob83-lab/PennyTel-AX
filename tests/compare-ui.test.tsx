@@ -231,6 +231,8 @@ describe('comparison UI uses shared cohort context', () => {
     window.pennytel = {
       load: vi.fn(),
       mutate: vi.fn(),
+      openBatchImport: vi.fn(),
+      commitBatchImport: vi.fn(),
       previewImport: vi.fn(),
       openImport: vi.fn(),
       exportData: vi.fn(),
@@ -274,11 +276,13 @@ describe('comparison UI uses shared cohort context', () => {
   })
 
   it('keeps the canonical package version visible across ordinary pages', async () => {
-    expect(version).toBe('0.2.1')
+    expect(version).toBe('0.2.2')
     const user = userEvent.setup()
     window.pennytel = {
       load: vi.fn().mockResolvedValue({ data: configurationFixture(), path: '/qa/telemetry.json' }),
       mutate: vi.fn(),
+      openBatchImport: vi.fn(),
+      commitBatchImport: vi.fn(),
       previewImport: vi.fn(),
       openImport: vi.fn(),
       exportData: vi.fn(),
@@ -298,6 +302,8 @@ describe('comparison UI uses shared cohort context', () => {
     window.pennytel = {
       load: vi.fn(),
       mutate: vi.fn(),
+      openBatchImport: vi.fn(),
+      commitBatchImport: vi.fn(),
       previewImport: vi.fn(),
       openImport: vi.fn(),
       exportData: vi.fn(),
@@ -339,6 +345,8 @@ describe('comparison UI uses shared cohort context', () => {
     window.pennytel = {
       load: vi.fn(),
       mutate: vi.fn(),
+      openBatchImport: vi.fn(),
+      commitBatchImport: vi.fn(),
       previewImport: vi.fn(),
       openImport: vi.fn(),
       exportData: vi.fn(),
@@ -357,6 +365,8 @@ describe('comparison UI uses shared cohort context', () => {
     window.pennytel = {
       load: vi.fn(),
       mutate: vi.fn(),
+      openBatchImport: vi.fn(),
+      commitBatchImport: vi.fn(),
       previewImport: vi.fn(),
       openImport: vi.fn(),
       exportData: vi.fn(),

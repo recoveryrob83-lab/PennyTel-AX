@@ -222,7 +222,12 @@ export default function App(): React.JSX.Element {
             />
           )}
           {page === 'data' && (
-            <Data data={data} path={path} onImport={(text) => mutate({ kind: 'import', text })} />
+            <Data
+              onBatchImported={setLoaded}
+              data={data}
+              path={path}
+              onImport={(text) => mutate({ kind: 'import', text })}
+            />
           )}
         </main>
       </div>
