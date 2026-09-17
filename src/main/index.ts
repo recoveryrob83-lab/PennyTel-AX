@@ -4,7 +4,10 @@ import { readFile, stat } from 'node:fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { TelemetryStore } from './store'
 import { writeExport } from './export'
-import type { Mutation } from '../shared/types'
+import { randomUUID } from 'node:crypto'
+import { discoverBatch } from './batch-import'
+import { mergeBatchImport } from '../shared/data'
+import type { ImportSource, Mutation } from '../shared/types'
 import { comparisonExport, validateComparisonRequest } from '../shared/comparison'
 import { version as appVersion } from '../../package.json'
 import { runComparisonPlanOperation } from './comparison-plan'
@@ -44,6 +47,32 @@ else {
         return action(...args)
       })
     }
+    let batch: { token: string; sources: ImportSource[]; revision: number } | undefined
+    handle('telemetry:open-batch', async () => {
+      batch = undefined
+      const selected = await dialog.showOpenDialog(mainWindow, {
+        title: 'Import PennyTel folder',
+        properties: ['openDirectory']
+      })
+      if (selected.canceled || !selected.filePaths[0]) return null
+      const sources = await discoverBatch(selected.filePaths[0])
+      if (!sources.length) throw new Error('No .pennytel.json files found in the selected folder.')
+      const { data } = await store.load()
+      const { preview } = mergeBatchImport(data, sources)
+      batch = { token: randomUUID(), sources, revision: data.revision }
+      return { ...preview, token: batch.token, revision: data.revision, fileCount: sources.length }
+    })
+    handle('telemetry:commit-batch', async (token) => {
+      if (!batch || token !== batch.token)
+        throw new Error('Select and preview the batch folder again.')
+      const selected = batch
+      batch = undefined
+      return store.mutate({
+        kind: 'batch-import',
+        sources: selected.sources,
+        revision: selected.revision
+      })
+    })
     handle('telemetry:load', () => store.initializeRegistry())
     handle('telemetry:mutate', (command) => store.mutate(command as Mutation))
     handle('telemetry:preview', (text) => {

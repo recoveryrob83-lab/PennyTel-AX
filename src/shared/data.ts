@@ -13,6 +13,7 @@ import {
 import {
   emptyDataset,
   TABLES,
+  type ImportSource,
   type Dataset,
   type Entity,
   type ImportPreview,
@@ -21,6 +22,20 @@ import {
   type Run,
   type Table
 } from './types'
+
+class RecordValidationError extends Error {
+  constructor(
+    message: string,
+    readonly table: Table,
+    readonly recordId: string
+  ) {
+    super(message)
+  }
+}
+
+function failRecord(table: Table, recordId: string, message: string): never {
+  throw new RecordValidationError(message, table, recordId)
+}
 
 function fail(message: string): never {
   throw new Error(message)
@@ -253,7 +268,7 @@ export function validateDataset(value: unknown): asserts value is Dataset {
   for (const table of ['runs', 'findings', 'discoveries'] as const) {
     for (const row of data[table]) {
       if (!data.slices.some((s) => s.id === row.sliceId))
-        fail(`${table} ${row.id}: slice “${row.sliceId}” does not exist.`)
+        failRecord(table, row.id, `${table} ${row.id}: slice “${row.sliceId}” does not exist.`)
       if (table !== 'runs') {
         for (const key of ['runId', 'repairRunId']) {
           const runId = (row as unknown as Record<string, unknown>)[key]
@@ -261,14 +276,18 @@ export function validateDataset(value: unknown): asserts value is Dataset {
             runId !== undefined &&
             !data.runs.some((r) => r.id === runId && r.sliceId === row.sliceId)
           )
-            fail(`${table} ${row.id}: ${key} must reference a run in the same slice.`)
+            failRecord(
+              table,
+              row.id,
+              `${table} ${row.id}: ${key} must reference a run in the same slice.`
+            )
         }
       }
     }
   }
   for (const slice of data.slices) {
     if (slice.acceptedAt && slice.startDate && slice.acceptedAt.slice(0, 10) < slice.startDate)
-      fail(`Slice ${slice.id}: acceptance precedes start date.`)
+      failRecord('slices', slice.id, `Slice ${slice.id}: acceptance precedes start date.`)
     if (
       slice.acceptedAt &&
       data.runs.some(
@@ -280,7 +299,9 @@ export function validateDataset(value: unknown): asserts value is Dataset {
           Date.parse(r.endAt) > Date.parse(slice.acceptedAt!)
       )
     )
-      fail(
+      failRecord(
+        'slices',
+        slice.id,
         `Slice ${slice.id}: a run crosses acceptance. Correct its timestamps or the acceptance timestamp.`
       )
   }
@@ -288,7 +309,11 @@ export function validateDataset(value: unknown): asserts value is Dataset {
   for (const p of data.pricing) {
     const key = JSON.stringify([p.model, p.provider, p.effectiveDate])
     if (prices.has(key))
-      fail('Pricing: only one price per exact model, provider, and effective date is allowed.')
+      failRecord(
+        'pricing',
+        p.id,
+        'Pricing: only one price per exact model, provider, and effective date is allowed.'
+      )
     prices.add(key)
   }
 }
@@ -368,70 +393,115 @@ export function mergeImport(
   current: Dataset,
   text: string
 ): { data: Dataset; preview: ImportPreview } {
-  if (text.length > 10_000_000) fail('Import exceeds the 10 MB limit.')
-  let input: unknown
-  try {
-    input = JSON.parse(text)
-  } catch {
-    fail('Invalid JSON. Paste or select a PennyTel dataset export.')
+  return mergeSources(current, [{ path: 'Import', text }], false)
+}
+
+export function mergeBatchImport(
+  current: Dataset,
+  sources: ImportSource[]
+): { data: Dataset; preview: ImportPreview } {
+  if (!Array.isArray(sources) || !sources.length || sources.length > 1000)
+    fail('Batch requires 1–1000 files.')
+  let bytes = 0
+  for (const source of sources) {
+    if (!source || typeof source.path !== 'string' || typeof source.text !== 'string')
+      fail('Invalid batch source.')
+    const size = new TextEncoder().encode(source.text).length
+    if (size > 10_000_000) fail(`${source.path}: Import exceeds the 10 MB limit.`)
+    bytes += size
   }
-  if (object(input) && input.kind === 'pennytel-model-registry')
-    fail('Use Model Registry to validate and install registry JSON.')
-  if (object(input) && input.kind === 'pennytel-comparison')
-    fail(
-      'Comparison exports are derived analysis, not importable telemetry. Select an Export dataset JSON file instead.'
-    )
-  if (object(input) && input.kind === 'pennytel-comparison-plan')
-    fail('Comparison plans are executable analysis requests. Use Run comparison plan.')
-  if (object(input) && input.kind === 'pennytel-comparison-plan-results')
-    fail('Comparison-plan results are derived analysis and cannot be imported as telemetry.')
-  if (!object(input) || ![1, 2].includes(input.schemaVersion as number))
-    fail('Import requires schemaVersion: 1 or 2.')
-  const incoming = normalizeEnvelope({ ...emptyDataset(), ...input, revision: 0 })
-  // Check each record first, then relationships against the combined dataset.
-  for (const key of Object.keys(incoming))
-    if (!['schemaVersion', 'revision', 'registry', ...TABLES].includes(key))
-      fail(`Unknown import field “${key}”.`)
+  if (bytes > 100_000_000) fail('Batch exceeds the 100 MB total limit.')
+  return mergeSources(current, sources)
+}
+
+function mergeSources(
+  current: Dataset,
+  sources: ImportSource[],
+  contextual = true
+): { data: Dataset; preview: ImportPreview } {
   let next = structuredClone(current)
-  if (incoming.registry !== undefined) {
-    validateRegistry(incoming.registry)
-    if (current.registry && canonical(incoming.registry) !== canonical(current.registry))
-      fail(
-        'Imported registry differs from the installed registry. Use Model Registry to update it explicitly, or omit registry to import telemetry only.'
-      )
-    next.registry = structuredClone(incoming.registry)
-  }
   const preview: ImportPreview = {
     counts: { slices: 0, runs: 0, findings: 0, discoveries: 0, pricing: 0 },
     skipped: 0
   }
-  for (const table of TABLES) {
-    if (!Array.isArray(incoming[table])) fail(`Import ${table} must be an array.`)
-    const seen = new Set<string>()
-    for (const row of incoming[table]) {
-      validateRecord(table, row)
-      if (seen.has(row.id)) fail(`Import ${table}: duplicate ID “${row.id}”.`)
-      seen.add(row.id)
-      const existing = (next[table] as Entity[]).find((r) => r.id === row.id)
-      if (existing) {
-        if (canonical(existing) !== canonical(row))
-          fail(
-            `${table} ${row.id}: conflicts with an existing record. Edit it in PennyTel, or assign a new ID and update its relationships before importing.`
-          )
-        preview.skipped++
-      } else {
-        ;(next[table] as Entity[]).push(row)
-        preview.counts[table]++
+  const origins = new Map<string, string>()
+  for (const { path, text } of sources) {
+    try {
+      if (text.length > 10_000_000) fail('Import exceeds the 10 MB limit.')
+      let input: unknown
+      try {
+        input = JSON.parse(text)
+      } catch {
+        fail('Invalid JSON. Paste or select a PennyTel dataset export.')
       }
+      if (object(input) && input.kind === 'pennytel-model-registry')
+        fail('Use Model Registry to validate and install registry JSON.')
+      if (object(input) && input.kind === 'pennytel-comparison')
+        fail(
+          'Comparison exports are derived analysis, not importable telemetry. Select an Export dataset JSON file instead.'
+        )
+      if (object(input) && input.kind === 'pennytel-comparison-plan')
+        fail('Comparison plans are executable analysis requests. Use Run comparison plan.')
+      if (object(input) && input.kind === 'pennytel-comparison-plan-results')
+        fail('Comparison-plan results are derived analysis and cannot be imported as telemetry.')
+      if (!object(input) || ![1, 2].includes(input.schemaVersion as number))
+        fail('Import requires schemaVersion: 1 or 2.')
+      const incoming = normalizeEnvelope({ ...emptyDataset(), ...input, revision: 0 })
+      // Check each record first, then relationships against the combined dataset.
+      for (const key of Object.keys(incoming))
+        if (!['schemaVersion', 'revision', 'registry', ...TABLES].includes(key))
+          fail(`Unknown import field “${key}”.`)
+      if (incoming.registry !== undefined) {
+        validateRegistry(incoming.registry)
+        if (current.registry && canonical(incoming.registry) !== canonical(current.registry))
+          fail(
+            'Imported registry differs from the installed registry. Use Model Registry to update it explicitly, or omit registry to import telemetry only.'
+          )
+        if (next.registry && canonical(incoming.registry) !== canonical(next.registry))
+          fail('Imported registries conflict within batch.')
+        next.registry = structuredClone(incoming.registry)
+      }
+      for (const table of TABLES) {
+        if (!Array.isArray(incoming[table])) fail(`Import ${table} must be an array.`)
+        const seen = new Set<string>()
+        for (const row of incoming[table]) {
+          validateRecord(table, row)
+          if (seen.has(row.id)) fail(`Import ${table}: duplicate ID “${row.id}”.`)
+          seen.add(row.id)
+          const existing = (next[table] as Entity[]).find((r) => r.id === row.id)
+          if (existing) {
+            if (canonical(existing) !== canonical(row))
+              fail(
+                `${table} ${row.id}: conflicts with an existing record. Edit it in PennyTel, or assign a new ID and update its relationships before importing.`
+              )
+            preview.skipped++
+          } else {
+            ;(next[table] as Entity[]).push(row)
+            preview.counts[table]++
+            origins.set(`${table} ${row.id}`, path)
+          }
+        }
+      }
+    } catch (error) {
+      fail(contextual ? `${path}: ${(error as Error).message}` : (error as Error).message)
     }
   }
-  validateDataset(next)
-  // Freeze rates only for newly imported runs; existing histories remain intact.
-  next.runs = next.runs.map((r) =>
-    !current.runs.some((old) => old.id === r.id) && !r.priceSnapshot ? snapshotRun(r, next) : r
-  )
-  next = backfillRegistry(next)
-  validateDataset(next)
+  try {
+    validateDataset(next)
+    // Freeze rates only for newly imported runs; existing histories remain intact.
+    next.runs = next.runs.map((r) =>
+      !current.runs.some((old) => old.id === r.id) && !r.priceSnapshot ? snapshotRun(r, next) : r
+    )
+    next = backfillRegistry(next)
+    validateDataset(next)
+  } catch (error) {
+    const message = (error as Error).message
+    const origin =
+      error instanceof RecordValidationError
+        ? origins.get(`${error.table} ${error.recordId}`)
+        : undefined
+    fail(contextual ? `${origin ?? sources.map((s) => s.path).join(', ')}: ${message}` : message)
+  }
   return { data: next, preview }
 }
 export function applyMutation(current: Dataset, command: Mutation): Dataset {
@@ -462,6 +532,8 @@ export function applyMutation(current: Dataset, command: Mutation): Dataset {
         )
     }
     next.registry = reconcileLegacyPricing(registry, current.pricing).registry
+  } else if (command.kind === 'batch-import') {
+    next = mergeBatchImport(current, command.sources).data
   } else if (command.kind === 'import') {
     if (typeof command.text !== 'string') fail('Import must be text.')
     next = mergeImport(current, command.text).data
