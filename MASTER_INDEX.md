@@ -1,7 +1,7 @@
 # PennyTel repository map
 
-Evidence-based map of the repository at accepted PennyTel `0.2.1` product
-candidate `8589e444486389c1fe44d6691fd4467f62cb2ee7`. This
+Evidence-based map of the repository at accepted PennyTel `0.2.2` product
+candidate `f776f9f50a5cc38ffa4a5dd412b6d57d21e91716`. This
 is a navigation aid for future slices, not a replacement for the assigned
 GitHub Issue or the authoritative contracts in `docs/`.
 
@@ -16,6 +16,8 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - Slice 5 comparison analytics/filtering context map: [`docs/context-maps/Slice_5_Comparison_Analytics_and_Filters_Context_Map.md`](docs/context-maps/Slice_5_Comparison_Analytics_and_Filters_Context_Map.md)
 - Slice 6 telemetry evidence context map: [`docs/context-maps/Slice_6_Telemetry_Evidence_Contract_Context_Map.md`](docs/context-maps/Slice_6_Telemetry_Evidence_Contract_Context_Map.md)
 - Slice 7 telemetry evidence surfaces/analysis context map: [`docs/context-maps/Slice_7_Telemetry_Evidence_Surfaces_and_Analysis_Context_Map.md`](docs/context-maps/Slice_7_Telemetry_Evidence_Surfaces_and_Analysis_Context_Map.md)
+- Accepted Slice 8 batch-import context map: [`docs/context-maps/Slice_8_Batch_Telemetry_Import_Context_Map.md`](docs/context-maps/Slice_8_Batch_Telemetry_Import_Context_Map.md)
+- Active Slice 9 storage-service/SQLite context map: [`docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md`](docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
 - Canonical registry input: [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json)
 - Runtime/verification record: [`docs/verification.md`](docs/verification.md) and [`docs/bounded-repair-verification.md`](docs/bounded-repair-verification.md)
@@ -38,10 +40,11 @@ map and use this master index when broader repository geography is needed.
   and `nodeIntegration: false`. Navigation, new windows, and permission
   requests are denied.
 - The main process registers the only application IPC handlers:
-  `telemetry:load`, `telemetry:mutate`, `telemetry:preview`, `telemetry:open`,
-  `telemetry:export`, `telemetry:export-comparison`, and
-  `telemetry:run-comparison-plan`. Each handler checks that the caller is the
+  `telemetry:open-batch`, `telemetry:commit-batch`, `telemetry:load`,
+  `telemetry:mutate`, `telemetry:preview`, `telemetry:open`, `telemetry:export`,
+  `telemetry:export-comparison`, and `telemetry:run-comparison-plan`. Each handler checks that the caller is the
   primary window's main frame before acting.
+- [`src/main/batch-import.ts`](src/main/batch-import.ts) owns bounded recursive discovery of `.pennytel.json` batch artifacts in an operator-selected folder, including containment/stability checks and file/count/depth/byte limits. It does not own persistence.
 - [`src/main/store.ts`](src/main/store.ts) is the authoritative in-memory and
   on-disk dataset owner. Registry seeding, validation, mutation serialization,
   revision checks, recovery guards, and backfill all pass through
@@ -53,8 +56,9 @@ map and use this master index when broader repository geography is needed.
 ### Preload bridge
 
 - [`src/preload/index.ts`](src/preload/index.ts) exposes exactly one typed
-  `window.pennytel` API through `contextBridge`: load, mutate, preview import,
-  open import, export dataset, export comparison, and run comparison plan.
+  `window.pennytel` API through `contextBridge`: open/commit batch import, load,
+  mutate, preview/open single import, export dataset, export comparison, and run
+  comparison plan.
 - [`src/preload/index.d.ts`](src/preload/index.d.ts) supplies the renderer's
   global `Window.pennytel` type. There is no generic IPC or filesystem API in
   the renderer.
@@ -105,11 +109,12 @@ map and use this master index when broader repository geography is needed.
   validates the original v1 envelope/records and changes only
   `schemaVersion: 1` to `2`, preserving IDs, relationships, omissions,
   registry data, and historical price snapshots;
-  `applyMutation` handles save/delete/import/registry-import and increments
+  `mergeImport` accepts one v1/v2 input, normalizes before relationship checks,
+  skips identical records, rejects conflicts, checks relationships, and backfills new runs;
+  `mergeBatchImport` validates named sources as one combined additive dataset,
+  resolves cross-file relationships independent of file ordering, preserves duplicate/conflict semantics, and attributes failures to source paths;
+  `applyMutation` handles save/delete/import/batch-import/registry-import and increments
   the dataset revision;
-  `mergeImport` accepts v1 or v2 input, normalizes before relationship checks,
-  validates an additive batch, skips identical records,
-  rejects conflicts, checks combined relationships, and backfills new runs;
   `snapshotRun` is the main-process pricing snapshot selector. The same file's
   `PennyTelAPI` type includes the analysis-only `runComparisonPlan` bridge.
 - Record relationships are intentionally same-slice: runs belong to slices;
@@ -157,9 +162,10 @@ evidence blocks loading/writing rather than silently starting empty.
 
 ### Import and export paths
 
-- Native import uses `src/main/index.ts`'s open-file dialog, a 10 MB limit, and
+- Native single-file import uses `src/main/index.ts`'s open-file dialog, a 10 MB limit, and
   `TelemetryStore.preview()`/`mergeImport()` before the renderer confirms the
   additive transaction.
+- Batch import uses the main-process folder picker plus `discoverBatch()` to find only bounded `.pennytel.json` artifacts, previews the combined source set through `mergeBatchImport()`, then consumes one opaque preview token and publishes through one revision-checked `TelemetryStore.mutate({ kind: 'batch-import', ... })` transaction. Identical records skip; conflicting stable IDs or invalid relationships fail closed without partial publication.
 - Raw dataset import accepts `schemaVersion: 1` or `2`, normalizes v1 before
   additive merge/relationship validation, and ignores imported revisions in
   favor of the local transaction revision. Registry seed JSON and comparison-
@@ -473,7 +479,8 @@ scripts exercise the real main/preload/renderer/filesystem path.
   [`scripts/electron-accepted-outcome-qa.mjs`](scripts/electron-accepted-outcome-qa.mjs),
   and [`scripts/electron-comparison-plan-qa.mjs`](scripts/electron-comparison-plan-qa.mjs),
   which invokes [`scripts/electron-analytics-qa.mjs`](scripts/electron-analytics-qa.mjs),
-  followed by [`scripts/electron-execution-evidence-qa.mjs`](scripts/electron-execution-evidence-qa.mjs).
+  followed by [`scripts/electron-execution-evidence-qa.mjs`](scripts/electron-execution-evidence-qa.mjs)
+  and [`scripts/electron-batch-import-qa.mjs`](scripts/electron-batch-import-qa.mjs).
   They use Playwright's Electron driver, isolated temporary
   `test-results/electron-qa-*`/repair/new-profile/registry/configuration-runtime-*
   profiles, real IPC,
@@ -507,6 +514,7 @@ scripts exercise the real main/preload/renderer/filesystem path.
   detail, evidence distributions/coverage, exact and missing filters/groups,
   ordinary comparison export, comparison-plan result parity, raw/live/backup
   stability, narrow-window layout, and Electron security invariants.
+- [`scripts/electron-batch-import-qa.mjs`](scripts/electron-batch-import-qa.mjs) uses an isolated profile and the real Electron path to prove nested artifact discovery, mixed v1/v2 batch preview, one atomic revision/backup publication, duplicate skips, failed-commit preservation/token invalidation, late malformed rejection, restart persistence, and the unchanged renderer security boundary.
 - `electron-analytics-qa.mjs` remains the general legacy analytics runtime
   helper. Against its isolated profile it verifies descriptive distributions and coverage,
   source-linked charts, UTC date trends, missing-versus-literal-Unknown
