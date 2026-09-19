@@ -1,7 +1,7 @@
 # PennyTel repository map
 
-Evidence-based map of the repository at accepted PennyTel `0.3.0` repository
-candidate `519bf37148bb3d1550ab1859e4599f026f62bba5`. This
+Evidence-based map of the repository at accepted PennyTel `0.3.1` product
+candidate `751288ebc1b9e59a6798b3f963fcb7b148626b2b`. This
 is a navigation aid for future slices, not a replacement for the assigned
 GitHub Issue or the authoritative contracts in `docs/`.
 
@@ -23,8 +23,11 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - Accepted Slice 12 pennyReporter integration/adoption context map: [`docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md`](docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md)
 - Accepted Slice 13 Codex receipt-discovery/reviewed-import context map: [`docs/context-maps/Slice_13_Codex_Receipt_Discovery_Reviewed_Run_Import_Context_Map.md`](docs/context-maps/Slice_13_Codex_Receipt_Discovery_Reviewed_Run_Import_Context_Map.md)
 - Accepted Slice 14 operator-workflow/telemetry-UX closure context map: [`docs/context-maps/Slice_14_Operator_Workflow_Telemetry_UX_Closure_Context_Map.md`](docs/context-maps/Slice_14_Operator_Workflow_Telemetry_UX_Closure_Context_Map.md)
-- Active Slice 15 Codex discovery-horizon hotfix context map: [`docs/context-maps/Slice_15_Codex_Discovery_Horizon_Hotfix_Context_Map.md`](docs/context-maps/Slice_15_Codex_Discovery_Horizon_Hotfix_Context_Map.md)
+- Accepted Slice 15 Codex discovery-horizon hotfix context map: [`docs/context-maps/Slice_15_Codex_Discovery_Horizon_Hotfix_Context_Map.md`](docs/context-maps/Slice_15_Codex_Discovery_Horizon_Hotfix_Context_Map.md)
 - S13 architecture escalation report: [`pennyos/worker-reports/S13/S13_Architecture_Escalation_01.md`](pennyos/worker-reports/S13/S13_Architecture_Escalation_01.md)
+- S15 Critic 01 summary: [`pennyos/worker-reports/S15/S15_Critic_01.md`](pennyos/worker-reports/S15/S15_Critic_01.md)
+- S15 Re-Critic 01 summary: [`pennyos/worker-reports/S15/S15_ReCritic_01.md`](pennyos/worker-reports/S15/S15_ReCritic_01.md)
+- S15 Re-Critic 02 acceptance summary: [`pennyos/worker-reports/S15/S15_ReCritic_02.md`](pennyos/worker-reports/S15/S15_ReCritic_02.md)
 - pennyReporter consumer contract and S13 handoff: [`docs/pennyreporter-integration.md`](docs/pennyreporter-integration.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
 - Canonical registry input: [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json)
@@ -63,7 +66,7 @@ map and use this master index when broader repository geography is needed.
   `telemetry:export-comparison`, `telemetry:run-comparison-plan`, and the narrow Codex-intake discover/create-Slice/commit channels. Each handler checks that the caller is the
   primary window's main frame before acting.
 - [`src/main/batch-import.ts`](src/main/batch-import.ts) owns bounded recursive discovery of `.pennytel.json` batch artifacts in an operator-selected folder, including containment/stability checks and file/count/depth/byte limits. It does not own persistence.
-- [`src/main/codex-intake.ts`](src/main/codex-intake.ts) owns the S13–S14 operator-triggered Codex receipt/rollout intake boundary. It validates project-local pennyReporter receipts through the installed Reporter protocol, enumerates only fixed active/archive Codex roots, performs bounded streaming rollout capture, reduces receipt authority monotonically (`none -> unique -> multiple`), freezes the first valid closure's measured Run, seals a bounded commit-time authority observation, and shares one eligibility evaluator between discovery and commit. S14 additionally carries explicit Reporter verification into the proposed Run and can offer a sanitized parent-Slice proposal only when both `pennyos/project.json` and the exact `pennyos/slices/<sliceId>.json` identity are genuinely Git-tracked; tracking/content authority is revalidated before ordinary revision-checked Slice publication. Creating the Slice never imports the Run and requires rediscovery. Raw rollout content remains main-process-only and transient.
+- [`src/main/codex-intake.ts`](src/main/codex-intake.ts) owns the S13–S15 operator-triggered Codex receipt/rollout intake boundary. It validates project-local pennyReporter receipts through the installed Reporter protocol, enumerates only fixed active/archive Codex roots, performs bounded streaming rollout capture, reduces receipt authority monotonically (`none -> unique -> multiple`), freezes the first valid closure's measured Run, seals a bounded commit-time authority observation, and shares one eligibility evaluator between discovery and commit. S14 additionally carries explicit Reporter verification into the proposed Run and can offer a sanitized parent-Slice proposal only when both `pennyos/project.json` and the exact `pennyos/slices/<sliceId>.json` identity are genuinely Git-tracked; tracking/content authority is revalidated before ordinary revision-checked Slice publication. Creating the Slice never imports the Run and requires rediscovery. S15 adds an exact 1/3/5-day operator discovery horizon. Horizon classification uses the timezone-aware timestamp from each rollout's bounded opening `session_meta` record rather than the timezone-free filename clock; malformed or missing producer time fails closed. The selected horizon/cutoff is bound to review and reused at commit, while classification, scanning, source verification, and inventory revalidation share the same 128,000,000-byte per-operation budget before the unchanged 200-eligible-file limit is enforced. Raw rollout content remains main-process-only and transient.
 - [`src/main/production-store.ts`](src/main/production-store.ts) is the normal
   PennyTel production storage facade. It admits startup authority deterministically,
   migrates a valid legacy live Dataset once into canonical JSON artifacts, preserves
