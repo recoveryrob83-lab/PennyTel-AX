@@ -2,11 +2,17 @@
 
 Issue: #29 — **0.3.1 Hotfix — selectable 1/3/5-day Codex discovery horizon**
 
+Status: **Accepted**
+
+Accepted product candidate:
+
+`751288ebc1b9e59a6798b3f963fcb7b148626b2b`
+
 Production finding baseline:
 
 `05c3e29bb7e6a7bd591e8059ff3d77ecd50eedf7`
 
-This is a narrow production hotfix. Issue #29 owns WHAT. This map owns WHERE. `AGENTS.md` owns HOW.
+This is an accepted narrow production hotfix. Issue #29 owns WHAT. This map owns WHERE. `AGENTS.md` owns HOW.
 
 ## Mission boundary
 
