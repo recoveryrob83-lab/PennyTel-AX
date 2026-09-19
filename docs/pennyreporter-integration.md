@@ -16,10 +16,10 @@ block. Runtime receipts are workflow evidence, not PennyTel telemetry, and are
 ignored by Git.
 
 For consumer validation, pennyReporter exposes `validateReceipt` and
-`matchTerminalBlockToReceipt` from its public protocol module. S13 should pair
-that matching receipt and terminal block with independently sourced session
-evidence; session discovery, turn matching, review, and PennyTel import remain
-outside this integration.
+`matchTerminalBlockToReceipt` from its public protocol module. Accepted S13 now
+uses those semantics to pair the durable receipt and final terminal block with
+independently sourced Codex rollout evidence before sanitized operator review and
+canonical PennyTel import.
 
 ## Codex intake (S13)
 
