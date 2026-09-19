@@ -211,10 +211,68 @@ describe('current Codex 0.155.1 closed-turn adapter', () => {
   })
 
   it('enumerates only fixed active and archived Codex session roots', async () => {
-    const paths = await rolloutPaths(resolve('tests/fixtures/codex-home'))
+    const now = Date.parse('2026-09-19T13:00:00.000Z')
+    const paths = await rolloutPaths(resolve('tests/fixtures/codex-home'), {
+      horizon: 1,
+      now,
+      cutoff: now - 86_400_000
+    })
     expect(paths).toHaveLength(2)
     expect(paths.some((path) => path.includes('/sessions/2026/09/19/'))).toBe(true)
     expect(paths.some((path) => path.includes('/archived_sessions/'))).toBe(true)
+  })
+
+  it('classifies rolling 1/3/5-day UTC boundaries before the 200-file bound', async () => {
+    await inTemp(async (home) => {
+      const active = join(home, 'sessions')
+      const archive = join(home, 'archived_sessions')
+      await mkdir(active)
+      await mkdir(archive)
+      const now = Date.parse('2026-09-19T12:00:00.000Z')
+      const add = async (root: string, date: string, suffix: string): Promise<void> => {
+        await writeFile(join(root, `rollout-${date}-${suffix}.jsonl`), '')
+      }
+      await add(active, '2026-09-18T12-00-00', 'one-boundary')
+      await add(archive, '2026-09-16T12-00-00', 'three-boundary')
+      await add(archive, '2026-09-14T12-00-00', 'five-boundary')
+      await add(active, '2026-09-14T11-59-59', 'outside')
+      for (let i = 0; i < 218; i++) await add(archive, '2026-09-01T12-00-00', `old-${i}`)
+      const paths = (horizon: 1 | 3 | 5): Promise<string[]> =>
+        rolloutPaths(home, { horizon, now, cutoff: now - horizon * 86_400_000 })
+      expect((await paths(1)).map((path) => path.includes('one-boundary'))).toEqual([true])
+      expect(await paths(3)).toHaveLength(2)
+      expect(await paths(5)).toHaveLength(3)
+      for (let i = 0; i < 198; i++) await add(active, '2026-09-19T11-00-00', `recent-${i}`)
+      expect(await paths(1)).toHaveLength(199)
+      await add(active, '2026-09-19T11-00-00', 'recent-198')
+      expect(await paths(1)).toHaveLength(200)
+      await add(active, '2026-09-19T11-00-00', 'recent-199')
+      await expect(paths(1)).rejects.toThrow('selected 1-day Codex window exceeds the 200-rollout')
+    })
+  })
+
+  it('fails closed on malformed, conflicting, and future source timestamps', async () => {
+    await inTemp(async (home) => {
+      const active = join(home, 'sessions', '2026', '09', '19')
+      await mkdir(active, { recursive: true })
+      const now = Date.parse('2026-09-19T13:00:00.000Z')
+      const paths = (): Promise<string[]> =>
+        rolloutPaths(home, { horizon: 1, now, cutoff: now - 86_400_000 })
+      const path = join(active, 'rollout-2026-09-19T12-00-00-valid.jsonl')
+      await writeFile(path, '')
+      expect(await paths()).toEqual([path])
+      for (const name of [
+        'rollout-unknown.jsonl',
+        'rollout-2026-02-30T12-00-00-invalid.jsonl',
+        'rollout-2026-09-18T12-00-00-conflict.jsonl',
+        'rollout-2026-09-20T12-00-00-future.jsonl'
+      ]) {
+        const bad = join(active, name)
+        await writeFile(bad, '')
+        await expect(paths()).rejects.toThrow(/timestamp|dates disagree/)
+        await rm(bad)
+      }
+    })
   })
 
   it('requires review, consumes preview tokens, checks revision, and never overwrites a Run', async () => {
@@ -696,6 +754,7 @@ async function authorityHarness(
     onPublish?: () => void
     realInventory?: boolean
     missingSlice?: boolean
+    now?: () => number
   } = {}
 ): Promise<AuthorityHarness> {
   const receiptDirectory = join(dir, '.pennyos', 'runtime', 'receipts')
@@ -714,7 +773,7 @@ async function authorityHarness(
   await writeFile(join(receiptDirectory, `${receiptId}.json`), receipt(receiptId).text)
   const home = join(dir, 'codex')
   await mkdir(join(home, 'sessions'), { recursive: true })
-  const rollout = join(home, 'sessions', 'rollout-source.jsonl')
+  const rollout = join(home, 'sessions', 'rollout-2026-09-19T12-00-00-source.jsonl')
   const fixture = await fixtureRecords()
   const original = lines(fixture.slice(0, 10)).replaceAll('/synthetic', dir)
   const closure = (id = receiptId, turn = 'later'): string =>
@@ -758,7 +817,8 @@ async function authorityHarness(
     store,
     options.protocol ?? reporter,
     home,
-    options.realInventory ? undefined : sources
+    options.realInventory ? undefined : sources,
+    options.now ?? (() => Date.parse('2026-09-19T13:00:00.000Z'))
   )
   const discover = async (id = receiptId): Promise<CodexIntakeCandidate> =>
     (await intake.discover()).find((candidate) => candidate.receiptId === id)!
@@ -779,6 +839,44 @@ async function authorityHarness(
 }
 
 afterEach(() => vi.restoreAllMocks())
+
+describe('S15 selected authority window', () => {
+  it('excludes an older duplicate, requires rediscovery on selection change, and binds commit to the reviewed cutoff', async () => {
+    await inTemp(async (dir) => {
+      let now = Date.parse('2026-09-19T13:00:00.000Z')
+      const h = await authorityHarness(dir, { realInventory: true, now: () => now })
+      const archived = join(h.home, 'archived_sessions')
+      await mkdir(archived)
+      await writeFile(join(archived, 'rollout-2026-09-16T12-00-00-duplicate.jsonl'), h.original)
+      const oneDay = await h.intake.discover(1)
+      const reviewed = oneDay.find((candidate) => candidate.receiptId === receiptId)!
+      expect(reviewed.status).toBe('ready')
+      const fiveDay = (await h.intake.discover(5)).find(
+        (candidate) => candidate.receiptId === receiptId
+      )!
+      expect(fiveDay.status).toBe('blocked')
+      expect(fiveDay.reason).toContain('Multiple terminal closures')
+      await expect(h.intake.commit(reviewed.token!)).rejects.toThrow('Discover and review')
+      const fresh = (await h.intake.discover(1)).find(
+        (candidate) => candidate.receiptId === receiptId
+      )!
+      expect(fresh.status).toBe('ready')
+      // A new current-time cutoff would exclude the reviewed active source.
+      now += 2 * 86_400_000
+      const saved = await h.intake.commit(fresh.token!)
+      expect(saved.data.runs).toEqual([fresh.run])
+      expect(h.writes).toHaveLength(1)
+    })
+  })
+
+  it('rejects arbitrary discovery duration before creating review authority', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir)
+      await expect(h.intake.discover(2 as 1)).rejects.toThrow('Invalid Codex discovery window')
+      expect(h.writes).toHaveLength(0)
+    })
+  })
+})
 
 describe('S13 sealed authority observation regression matrix', () => {
   it.each([
@@ -1148,7 +1246,10 @@ describe('S13 sealed authority observation regression matrix', () => {
         const h = await authorityHarness(dir, { protocol, realInventory: true })
         const preview = await h.discover()
         const create = (): void => {
-          writeFileSync(join(h.home, 'sessions', 'rollout-new.jsonl'), h.original)
+          writeFileSync(
+            join(h.home, 'sessions', 'rollout-2026-09-19T12-00-01-new.jsonl'),
+            h.original
+          )
           introduce = undefined
         }
         if (when === 'before') create()

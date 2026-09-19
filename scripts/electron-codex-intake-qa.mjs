@@ -10,9 +10,13 @@ const root = await mkdtemp(resolve('test-results/codex-intake-runtime-'))
 const repo = join(root, 'repository')
 const home = join(root, 'codex-home')
 const profile = join(root, 'pennytel-profile')
+const now = new Date()
+const [year, month, day] = now.toISOString().slice(0, 10).split('-')
+const stamp = now.toISOString().slice(0, 19).replaceAll(':', '-')
 await mkdir(join(repo, 'pennyos', 'slices'), { recursive: true })
 await mkdir(join(repo, '.pennyos', 'runtime', 'receipts'), { recursive: true })
-await mkdir(join(home, 'sessions', '2026', '09', '19'), { recursive: true })
+await mkdir(join(home, 'sessions', year, month, day), { recursive: true })
+await mkdir(join(home, 'archived_sessions'), { recursive: true })
 await mkdir(profile, { recursive: true })
 await writeFile(
   join(repo, 'pennyos', 'project.json'),
@@ -30,15 +34,10 @@ await copyFile(
 const rollout = (
   await readFile(resolve('tests/fixtures/codex-rollout-current-0.155.1.jsonl'), 'utf8')
 ).replaceAll('/synthetic', repo)
-const rolloutPath = join(
-  home,
-  'sessions',
-  '2026',
-  '09',
-  '19',
-  'rollout-2026-09-19T12-00-00-fixture.jsonl'
-)
+const rolloutPath = join(home, 'sessions', year, month, day, `rollout-${stamp}-fixture.jsonl`)
 await writeFile(rolloutPath, rollout)
+for (let i = 0; i < 218; i++)
+  await writeFile(join(home, 'archived_sessions', `rollout-2020-01-01T00-00-00-old-${i}.jsonl`), '')
 
 let application
 const env = {
@@ -86,6 +85,29 @@ try {
   )
   assert.ok(!bridge.some((name) => /filesystem|readfile|sql|rollout/i.test(name)))
   await page.getByRole('navigation').getByRole('button', { name: 'Data & portability' }).click()
+  const selector = page.getByLabel('Codex discovery window')
+  assert.deepEqual(await selector.locator('option').allTextContents(), [
+    'Last 1 day',
+    'Last 3 days',
+    'Last 5 days'
+  ])
+  assert.equal(await selector.inputValue(), '1')
+  const invalidWindow = await page.evaluate(async () => {
+    try {
+      await window.pennytel.discoverCodexRuns(2)
+      return ''
+    } catch (error) {
+      return String(error)
+    }
+  })
+  assert.match(invalidWindow, /Invalid Codex discovery window/)
+  await selector.selectOption('3')
+  await page.getByRole('button', { name: 'Discover Codex runs' }).click()
+  await page.getByText('Reviewed Codex window: last 3 days.').waitFor()
+  await selector.selectOption('5')
+  await page.getByRole('button', { name: 'Discover Codex runs' }).click()
+  await page.getByText('Reviewed Codex window: last 5 days.').waitFor()
+  await selector.selectOption('1')
   for (const path of ['pennyos/project.json', 'pennyos/slices/S13.json']) {
     const other =
       path === 'pennyos/project.json' ? 'pennyos/slices/S13.json' : 'pennyos/project.json'
@@ -114,6 +136,7 @@ try {
     'pennyos/slices/S13.json'
   ])
   await page.getByRole('button', { name: 'Discover Codex runs' }).click()
+  await page.getByText('Reviewed Codex window: last 1 day.').waitFor()
   await page.getByRole('heading', { name: `${fixtureId} · blocked` }).waitFor()
   await page.getByRole('button', { name: 'Create Slice' }).click()
   await page.getByRole('status').filter({ hasText: 'Discover Codex runs again' }).waitFor()
@@ -129,7 +152,8 @@ try {
   assert.equal(before.runs.length, 0)
   // Exercise the repaired authority gate in the real main process before the UI import.
   const candidate = await page.evaluate(
-    async (id) => (await window.pennytel.discoverCodexRuns()).find((item) => item.receiptId === id),
+    async (id) =>
+      (await window.pennytel.discoverCodexRuns(1)).find((item) => item.receiptId === id),
     fixtureId
   )
   const records = rollout.trimEnd().split('\n')
@@ -233,7 +257,7 @@ try {
   await page.getByRole('button', { name: 'Discover Codex runs' }).click()
   await page.getByRole('heading', { name: `${fixtureId} · already imported` }).waitFor()
   console.log(
-    'Electron Codex intake QA passed: untracked/ignored identity blocked, tracked parent creation, rediscovery, review, duplicate rejection, safe resume, verification import, acceptance, restart, Compare compaction/expansion/coverage, idempotency'
+    'Electron Codex intake QA passed: 1/3/5-day selector and IPC validation, 218 old rollouts excluded, untracked/ignored identity blocked, tracked parent creation, rediscovery, review, duplicate rejection, safe resume, verification import, acceptance, restart, Compare compaction/expansion/coverage, idempotency'
   )
 } finally {
   if (application) await application.close()

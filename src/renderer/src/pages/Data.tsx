@@ -5,6 +5,7 @@ import {
   type Dataset,
   type BatchPreview,
   type CodexIntakeCandidate,
+  type CodexDiscoveryHorizon,
   type LoadedData,
   type ImportPreview
 } from '../../../shared/types'
@@ -22,6 +23,8 @@ export function Data({
 }): React.JSX.Element {
   const [batch, setBatch] = useState<BatchPreview>()
   const [codexCandidates, setCodexCandidates] = useState<CodexIntakeCandidate[]>()
+  const [codexHorizon, setCodexHorizon] = useState<CodexDiscoveryHorizon>(1)
+  const [reviewedHorizon, setReviewedHorizon] = useState<CodexDiscoveryHorizon>()
   const [text, setText] = useState('')
   const [preview, setPreview] = useState<ImportPreview>()
   const [error, setError] = useState('')
@@ -246,18 +249,41 @@ export function Data({
               importing it into this dataset.
             </p>
           </div>
-          <button
-            disabled={busy}
-            onClick={() =>
-              run(async () => {
-                setCodexCandidates(undefined)
-                setCodexCandidates(await window.pennytel.discoverCodexRuns())
-              })
-            }
-          >
-            Discover Codex runs
-          </button>
+          <div>
+            <label htmlFor="codex-horizon">Codex discovery window</label>{' '}
+            <select
+              id="codex-horizon"
+              value={codexHorizon}
+              disabled={busy}
+              onChange={(event) =>
+                setCodexHorizon(Number(event.target.value) as CodexDiscoveryHorizon)
+              }
+            >
+              <option value={1}>Last 1 day</option>
+              <option value={3}>Last 3 days</option>
+              <option value={5}>Last 5 days</option>
+            </select>{' '}
+            <button
+              disabled={busy}
+              onClick={() =>
+                run(async () => {
+                  setCodexCandidates(undefined)
+                  setReviewedHorizon(undefined)
+                  const candidates = await window.pennytel.discoverCodexRuns(codexHorizon)
+                  setCodexCandidates(candidates)
+                  setReviewedHorizon(codexHorizon)
+                })
+              }
+            >
+              Discover Codex runs
+            </button>
+          </div>
         </div>
+        {codexCandidates && (
+          <p>
+            Reviewed Codex window: last {reviewedHorizon} day{reviewedHorizon === 1 ? '' : 's'}.
+          </p>
+        )}
         {codexCandidates &&
           (codexCandidates.length ? (
             codexCandidates.map((item) => (

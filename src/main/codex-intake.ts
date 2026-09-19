@@ -8,7 +8,13 @@ import { createRequire } from 'node:module'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { CodexExecutionEvidence } from '../shared/execution-evidence'
-import type { CodexIntakeCandidate, Dataset, Run, Slice } from '../shared/types'
+import type {
+  CodexDiscoveryHorizon,
+  CodexIntakeCandidate,
+  Dataset,
+  Run,
+  Slice
+} from '../shared/types'
 import { validateRecord } from '../shared/data'
 import type { ProductionStore } from './production-store'
 
@@ -188,6 +194,12 @@ interface Preview {
   observation: AuthorityObservation
   match: Match
   revision: number
+  window: DiscoveryWindow
+}
+interface DiscoveryWindow {
+  horizon: CodexDiscoveryHorizon
+  cutoff: number
+  now: number
 }
 
 /** Both review and commit evaluate the same sealed authority and Dataset rules. */
@@ -391,8 +403,29 @@ export function installedReporter(): Reporter {
   }
   throw new Error('Installed pennyReporter was not found on PATH.')
 }
+/** Codex rollout names encode a UTC creation second; mtime is never discovery authority. */
+function rolloutTimestamp(name: string): number {
+  const match =
+    /^rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-([A-Za-z0-9_-]+)\.jsonl$/.exec(name)
+  if (!match) throw new Error('Codex rollout filename has an unclassifiable timestamp.')
+  const [, year, month, day, hour, minute, second] = match
+  const value = Date.UTC(+year, +month - 1, +day, +hour, +minute, +second)
+  const date = new Date(value)
+  if (
+    !Number.isFinite(value) ||
+    date.getUTCFullYear() !== +year ||
+    date.getUTCMonth() + 1 !== +month ||
+    date.getUTCDate() !== +day ||
+    date.getUTCHours() !== +hour ||
+    date.getUTCMinutes() !== +minute ||
+    date.getUTCSeconds() !== +second
+  )
+    throw new Error('Codex rollout filename has an invalid timestamp.')
+  return value
+}
 export async function rolloutPaths(
   home: string,
+  window: DiscoveryWindow,
   directories: Record<string, SourceStamp> = {}
 ): Promise<string[]> {
   const paths: string[] = []
@@ -420,8 +453,27 @@ export async function rolloutPaths(
         if (entry.isDirectory()) await walk(child, depth + 1)
         else if (entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) {
           if (!entry.isFile()) throw new Error('Nonregular rollout source.')
+          const sourceTime = rolloutTimestamp(entry.name)
+          // Dated active-session directories must agree with the source's own identity.
+          const rel = relative(base, child).split(sep)
+          if (
+            name === 'sessions' &&
+            rel.length === 4 &&
+            /^\d{4}$/.test(rel[0]) &&
+            /^\d{2}$/.test(rel[1]) &&
+            /^\d{2}$/.test(rel[2]) &&
+            `${rel[0]}-${rel[1]}-${rel[2]}` !== entry.name.slice(8, 18)
+          )
+            throw new Error('Codex rollout directory and filename dates disagree.')
+          if (sourceTime > window.now)
+            throw new Error(
+              'Codex rollout timestamp is in the future; discovery cannot classify it.'
+            )
+          if (sourceTime < window.cutoff) continue
           if (paths.length >= MAX_FILES)
-            throw new Error('Relevant Codex rollout file count exceeds limit.')
+            throw new Error(
+              `The selected ${window.horizon}-day Codex window exceeds the 200-rollout safety limit. Choose a smaller window.`
+            )
           paths.push(child)
         }
       }
@@ -898,7 +950,8 @@ export class CodexIntake {
       receiptDirectory: string
       rolloutFiles: string[]
       sourceRepositoryRoot: string
-    }
+    },
+    private readonly now: () => number = Date.now
   ) {}
 
   private protocol(): Reporter {
@@ -975,7 +1028,10 @@ export class CodexIntake {
     return { valid, rejected }
   }
 
-  private async capture(receipts: Receipt[]): Promise<AuthorityObservation> {
+  private async capture(
+    receipts: Receipt[],
+    window: DiscoveryWindow
+  ): Promise<AuthorityObservation> {
     const authority: Record<string, ReceiptAuthority> = Object.fromEntries(
       receipts.map((receipt) => [receipt.report.receiptId, emptyAuthority()])
     )
@@ -986,7 +1042,7 @@ export class CodexIntake {
     const files = async (captured: Record<string, SourceStamp>): Promise<string[]> => {
       const paths = this.testSources?.rolloutFiles
         ? [...this.testSources.rolloutFiles].sort()
-        : await rolloutPaths(this.codexHome, captured)
+        : await rolloutPaths(this.codexHome, window, captured)
       if (paths.length > MAX_FILES)
         throw new Error('Relevant Codex rollout file count exceeds limit.')
       return paths
@@ -1060,12 +1116,17 @@ export class CodexIntake {
     })
   }
 
-  async discover(): Promise<CodexIntakeCandidate[]> {
+  async discover(horizon: CodexDiscoveryHorizon = 1): Promise<CodexIntakeCandidate[]> {
+    if (horizon !== 1 && horizon !== 3 && horizon !== 5)
+      throw new Error('Invalid Codex discovery window. Choose 1, 3, or 5 days.')
     this.previews.clear()
     this.slicePreviews.clear()
+    const now = this.now()
+    if (!Number.isFinite(now)) throw new Error('Codex discovery clock is unavailable.')
+    const window = freeze({ horizon, now, cutoff: now - horizon * 86_400_000 })
     const { data } = await this.store.load()
     const { valid, rejected } = await this.receipts()
-    const observation = await this.capture(valid)
+    const observation = await this.capture(valid, window)
     return [
       ...rejected,
       ...valid.map((receipt): CodexIntakeCandidate => {
@@ -1109,7 +1170,7 @@ export class CodexIntake {
         }
         const match = decision.match
         const token = randomUUID()
-        this.previews.set(token, { observation, match, revision: data.revision })
+        this.previews.set(token, { observation, match, revision: data.revision, window })
         const run = match.run
         const unknowns = (
           [
@@ -1192,7 +1253,7 @@ export class CodexIntake {
     )
     if (!freshReceipt || freshReceipt.digest !== selected.match.receipt.digest)
       throw new Error('Receipt changed; rediscover before import.')
-    const observation = await this.capture(valid)
+    const observation = await this.capture(valid, selected.window)
     const decision = eligibility(observation, freshReceipt, data)
     if (decision.status !== 'ready' || !decision.match)
       throw new Error(decision.reason ?? 'Deterministic Run ID already exists; import refused.')

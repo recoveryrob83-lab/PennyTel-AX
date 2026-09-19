@@ -1,6 +1,6 @@
 {
   "name": "pennytel",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Local PennyOS Engineering telemetry workbench",
   "main": "./out/main/index.js",
   "author": "PennyOS Engineering",

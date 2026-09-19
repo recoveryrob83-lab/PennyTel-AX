@@ -1,4 +1,4 @@
-# PennyTel 0.3.0
+# PennyTel 0.3.1
 
 PennyTel is a local-first engineering telemetry workbench for comparing real LLM-assisted software work.
 
@@ -64,7 +64,7 @@ npm run build:win
 The configured installer artifact is named like:
 
 ```text
-pennytel-0.3.0-setup.exe
+pennytel-0.3.1-setup.exe
 ```
 
 Windows code signing is not configured, so self-built or unsigned release binaries may trigger Windows publisher/SmartScreen warnings.
@@ -85,13 +85,13 @@ Every record can be edited. Deletion protects referenced slices/runs. Failed sav
 
 ## Schema v2 and execution evidence
 
-PennyTel 0.3.0 uses raw dataset schema v2. Valid schema-v1 datasets remain loadable/importable through deterministic normalization; simply reading an old dataset does not rewrite it.
+PennyTel 0.3.1 uses raw dataset schema v2. Valid schema-v1 datasets remain loadable/importable through deterministic normalization; simply reading an old dataset does not rewrite it.
 
 A run may contain optional structured `executionEvidence` for normalized Codex rollout facts such as source provenance, session/turn identity, runtime version, TTFT, invocation/tool-call counts, paired peak context occupancy, coarse quota-window readings, and execution-environment constraints.
 
 Execution evidence does **not** infer PennyOS workflow semantics such as slice, run type, role, result, or context mode. Those remain explicit operator/orchestrator metadata.
 
-For Codex work, pennyReporter produces a local receipt. **Data & portability** discovers matching closed Codex turns and shows a sanitized proposal. Import is always an explicit operator action. If the Dataset lacks the tracked Slice, **Create Slice** saves only its explicit ID, title, and project; discover again before importing the Run. No separate parser or manual JSON handoff is needed for this workflow. Generic JSON import remains available. `Run.verification` records only explicit worker verification (`Passed`, `Failed`, `Partial`, `Not run`, or `Unknown`); it is independent of result, build checks, and runtime testing. Omitted historical verification remains Unknown.
+For Codex work, pennyReporter produces a local receipt. **Data & portability** searches the selected last 1, 3, or 5 days of Codex rollouts (default 1 day) and shows a sanitized proposal. The selected window stays bound to review and import. Import is always an explicit operator action. If the Dataset lacks the tracked Slice, **Create Slice** saves only its explicit ID, title, and project; discover again before importing the Run. No separate parser or manual JSON handoff is needed for this workflow. Generic JSON import remains available. `Run.verification` records only explicit worker verification (`Passed`, `Failed`, `Partial`, `Not run`, or `Unknown`); it is independent of result, build checks, and runtime testing. Omitted historical verification remains Unknown.
 
 Quota `usedPercent` evidence is descriptive source evidence and is not converted into legacy remaining-percentage usage burn. Raw prompts, hidden reasoning, source excerpts, tool commands, and full tool output are outside the normal PennyTel dataset contract.
 

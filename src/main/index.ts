@@ -7,7 +7,7 @@ import { writeExport } from './export'
 import { randomUUID } from 'node:crypto'
 import { discoverBatch } from './batch-import'
 import { mergeBatchImport } from '../shared/data'
-import type { ImportSource, Mutation } from '../shared/types'
+import type { CodexDiscoveryHorizon, ImportSource, Mutation } from '../shared/types'
 import { comparisonExport, validateComparisonRequest } from '../shared/comparison'
 import { version as appVersion } from '../../package.json'
 import { runComparisonPlanOperation } from './comparison-plan'
@@ -62,7 +62,11 @@ else {
       })
     }
     let batch: { token: string; sources: ImportSource[]; revision: number } | undefined
-    handle('telemetry:discover-codex', () => codexIntake.discover())
+    handle('telemetry:discover-codex', (horizon) => {
+      if (horizon !== 1 && horizon !== 3 && horizon !== 5)
+        throw new Error('Invalid Codex discovery window. Choose 1, 3, or 5 days.')
+      return codexIntake.discover(horizon as CodexDiscoveryHorizon)
+    })
     handle('telemetry:create-codex-slice', (token) => {
       if (typeof token !== 'string') throw new Error('Invalid Codex Slice token.')
       return codexIntake.createSlice(token)

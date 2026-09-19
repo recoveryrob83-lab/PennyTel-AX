@@ -21,7 +21,7 @@ uses those semantics to pair the durable receipt and final terminal block with
 independently sourced Codex rollout evidence before sanitized operator review and
 canonical PennyTel import.
 
-## Codex intake (S13–S14)
+## Codex intake (S13–S15)
 
 Data & portability can discover project-local receipts and matching closed Codex
 turns. Start PennyTel from the project checkout, or set `PENNYTEL_REPO_DIR` to
@@ -31,8 +31,8 @@ rollouts are searched. The installed `pennyReporter` v0.1.0 public package main
 validates receipts and final terminal blocks. It must be on `PATH` when
 discovery runs.
 
-Discovery is operator-triggered and read-only. It considers at most 100 receipts,
-200 rollout files across the fixed roots, 32 MB per rollout, 256 KB per line, 100,000 lines per
+Discovery is operator-triggered and read-only. The operator selects a rolling last 1, 3, or 5 days (default 1 day). UTC rollout filename timestamps define which sources enter the reviewed authority domain; older history does not count against the 200-file bound. The selected cutoff is fixed for review and commit. Unclassifiable timestamps block discovery. It considers at most 100 receipts,
+200 rollout files inside the selected window, 32 MB per rollout, 256 KB per line, 100,000 lines per
 file, and 128 MB per operation. Unsupported or changing sources block review
 with a bounded reason. Matching requires a Codex assistant `final_answer` and
 its explicit `task_complete`. Only normalized Run and execution evidence reach

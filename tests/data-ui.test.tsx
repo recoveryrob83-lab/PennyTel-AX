@@ -32,6 +32,7 @@ it('creates a reviewed tracked parent explicitly without importing a Run', async
     <Data data={emptyDataset()} path="QA" onImport={vi.fn()} onBatchImported={onBatchImported} />
   )
   await userEvent.click(screen.getByRole('button', { name: 'Discover Codex runs' }))
+  expect(discoverCodexRuns).toHaveBeenCalledWith(1)
   expect(screen.getByText(/Tracked Slice: S14/)).toHaveTextContent('Tracked title · PennyTel')
   expect(createCodexSlice).not.toHaveBeenCalled()
   await userEvent.click(screen.getByRole('button', { name: 'Create Slice' }))
@@ -77,6 +78,7 @@ it('shows sanitized Codex review and imports only after the operator clicks', as
     />
   )
   await userEvent.click(screen.getByRole('button', { name: 'Discover Codex runs' }))
+  expect(screen.getByText('Reviewed Codex window: last 1 day.')).toBeVisible()
   expect(await screen.findByText('pr1_test · ready')).toBeVisible()
   expect(screen.getByText(/verification: Passed · findings: 0/)).toBeVisible()
   expect(screen.getByText('Unknown: inputTokens, outputTokens')).toBeVisible()
@@ -86,6 +88,29 @@ it('shows sanitized Codex review and imports only after the operator clicks', as
   await userEvent.click(screen.getByRole('button', { name: 'Import reviewed Run' }))
   expect(importCodexRun).toHaveBeenCalledWith('opaque-token')
   expect(onBatchImported).toHaveBeenCalledWith(result)
+})
+it('offers only 1/3/5 days and keeps the reviewed window when the selector changes', async () => {
+  const discoverCodexRuns = vi.fn().mockResolvedValue([])
+  window.pennytel = { discoverCodexRuns } as unknown as PennyTelAPI
+  render(<Data data={emptyDataset()} path="QA" onImport={vi.fn()} onBatchImported={vi.fn()} />)
+  const selector = screen.getByLabelText('Codex discovery window')
+  expect(selector).toHaveValue('1')
+  expect([...selector.querySelectorAll('option')].map((option) => option.value)).toEqual([
+    '1',
+    '3',
+    '5'
+  ])
+  await userEvent.click(screen.getByRole('button', { name: 'Discover Codex runs' }))
+  expect(discoverCodexRuns).toHaveBeenCalledWith(1)
+  await userEvent.selectOptions(selector, '3')
+  expect(screen.getByText('Reviewed Codex window: last 1 day.')).toBeVisible()
+  await userEvent.click(screen.getByRole('button', { name: 'Discover Codex runs' }))
+  expect(discoverCodexRuns).toHaveBeenLastCalledWith(3)
+  expect(screen.getByText('Reviewed Codex window: last 3 days.')).toBeVisible()
+  await userEvent.selectOptions(selector, '5')
+  await userEvent.click(screen.getByRole('button', { name: 'Discover Codex runs' }))
+  expect(discoverCodexRuns).toHaveBeenLastCalledWith(5)
+  expect(screen.getByText('Reviewed Codex window: last 5 days.')).toBeVisible()
 })
 it('previews before committing, reports counts and keeps single import available', async () => {
   const result = { data: { ...emptyDataset(), revision: 1 }, path: 'QA' }

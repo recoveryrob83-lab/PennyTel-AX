@@ -231,8 +231,9 @@ export interface CodexIntakeCandidate {
   unknowns?: string[]
   warnings?: string[]
 }
+export type CodexDiscoveryHorizon = 1 | 3 | 5
 export interface PennyTelAPI {
-  discoverCodexRuns: () => Promise<CodexIntakeCandidate[]>
+  discoverCodexRuns: (horizon: CodexDiscoveryHorizon) => Promise<CodexIntakeCandidate[]>
   createCodexSlice: (token: string) => Promise<LoadedData>
   importCodexRun: (token: string) => Promise<LoadedData>
   openBatchImport: () => Promise<BatchPreview | null>
