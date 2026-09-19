@@ -1,6 +1,6 @@
 import { _electron as electron } from 'playwright'
 import assert from 'node:assert/strict'
-import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 const fixtureId = 'pr1_20260919T120000000Z_11111111111111111111111111111111'
@@ -25,10 +25,15 @@ await copyFile(
 const rollout = (
   await readFile(resolve('tests/fixtures/codex-rollout-current-0.155.1.jsonl'), 'utf8')
 ).replaceAll('/synthetic', repo)
-await writeFile(
-  join(home, 'sessions', '2026', '09', '19', 'rollout-2026-09-19T12-00-00-fixture.jsonl'),
-  rollout
+const rolloutPath = join(
+  home,
+  'sessions',
+  '2026',
+  '09',
+  '19',
+  'rollout-2026-09-19T12-00-00-fixture.jsonl'
 )
+await writeFile(rolloutPath, rollout)
 
 let application
 const env = {
@@ -88,6 +93,31 @@ try {
   await page.getByText(/Unknown: executionEvidence\.sourceLog\.contentHash/).waitFor()
   const before = await page.evaluate(async () => (await window.pennytel.load()).data)
   assert.equal(before.runs.length, 0)
+  // Exercise the repaired authority gate in the real main process before the UI import.
+  const candidate = await page.evaluate(
+    async (id) => (await window.pennytel.discoverCodexRuns()).find((item) => item.receiptId === id),
+    fixtureId
+  )
+  const records = rollout.trimEnd().split('\n')
+  const duplicate = records.slice(1, 10).join('\n') + '\n'
+  await writeFile(rolloutPath, records.slice(0, 10).join('\n') + '\n' + duplicate)
+  const rejected = await page.evaluate(async (token) => {
+    try {
+      await window.pennytel.importCodexRun(token)
+      return ''
+    } catch (error) {
+      return String(error)
+    }
+  }, candidate.token)
+  assert.match(rejected, /Multiple terminal closures/)
+  const unchanged = await page.evaluate(async () => (await window.pennytel.load()).data)
+  assert.equal(unchanged.revision, before.revision)
+  assert.equal(unchanged.runs.length, 0)
+  await writeFile(rolloutPath, records.slice(0, 10).join('\n') + '\n')
+  await page.getByRole('button', { name: 'Discover Codex runs' }).click()
+  await page.getByRole('heading', { name: `${fixtureId} · ready` }).waitFor()
+  // A safe resumed suffix changes authority coverage but never measured telemetry.
+  await appendFile(rolloutPath, records.slice(10).join('\n') + '\n')
   await page.getByRole('button', { name: 'Import reviewed Run' }).click()
   await page
     .getByRole('status')
@@ -108,7 +138,9 @@ try {
   await page.getByRole('navigation').getByRole('button', { name: 'Data & portability' }).click()
   await page.getByRole('button', { name: 'Discover Codex runs' }).click()
   await page.getByRole('heading', { name: `${fixtureId} · already imported` }).waitFor()
-  console.log('Electron Codex intake QA passed: discover, review, import, restart, idempotency')
+  console.log(
+    'Electron Codex intake QA passed: discover, review, duplicate rejection, safe resume, import, restart, idempotency'
+  )
 } finally {
   if (application) await application.close()
 }

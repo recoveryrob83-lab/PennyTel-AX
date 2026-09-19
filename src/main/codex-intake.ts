@@ -6,7 +6,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
 import type { CodexExecutionEvidence } from '../shared/execution-evidence'
-import type { CodexIntakeCandidate, Run } from '../shared/types'
+import type { CodexIntakeCandidate, Dataset, Run } from '../shared/types'
 import { validateRecord } from '../shared/data'
 import type { ProductionStore } from './production-store'
 
@@ -79,26 +79,109 @@ export interface Match {
   sourceInode: number
   warnings: string[]
 }
-class PartialScanError extends Error {
-  constructor(
-    message: string,
-    readonly matches: Match[],
-    readonly affected: Set<string> | undefined = undefined,
-    readonly canUseMatches = false
-  ) {
-    super(message)
+/** Authority only advances; measurement is the immutable first valid closure. */
+export interface ReceiptAuthority {
+  cardinality: 'none' | 'unique' | 'multiple'
+  first?: Match
+  conflicts: string[]
+  uncertainties: string[]
+}
+type AuthorityEvent = { kind: 'closure'; match: Match } | { kind: 'uncertain'; reason: string }
+
+function diagnostic(values: string[], reason: string): string[] {
+  return values.includes(reason) || values.length >= 3 ? values : [...values, reason]
+}
+export function reduceAuthority(state: ReceiptAuthority, event: AuthorityEvent): ReceiptAuthority {
+  if (event.kind === 'uncertain')
+    return { ...state, uncertainties: diagnostic(state.uncertainties, event.reason) }
+  if (state.cardinality === 'none')
+    return { ...state, cardinality: 'unique', first: freeze(event.match) }
+  return {
+    ...state,
+    cardinality: 'multiple',
+    conflicts: diagnostic(state.conflicts, 'Multiple terminal closures match this receipt.')
   }
 }
-class UnrelatedRolloutError extends Error {}
+function emptyAuthority(): ReceiptAuthority {
+  return { cardinality: 'none', conflicts: [], uncertainties: [] }
+}
+function freeze<T>(value: T): T {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) freeze(child)
+    Object.freeze(value)
+  }
+  return value
+}
+interface SourceStamp {
+  dev: number
+  ino: number
+  size: number
+  mtimeMs: number
+  ctimeMs: number
+}
+function stamp(value: SourceStamp): SourceStamp {
+  return {
+    dev: value.dev,
+    ino: value.ino,
+    size: value.size,
+    mtimeMs: value.mtimeMs,
+    ctimeMs: value.ctimeMs
+  }
+}
+function sameStamp(a: SourceStamp, b: SourceStamp): boolean {
+  return JSON.stringify(stamp(a)) === JSON.stringify(stamp(b))
+}
+interface FileObservation {
+  path: string
+  identity: SourceStamp
+  inspectedBytes: number
+  digest: string
+  authority: Record<string, ReceiptAuthority>
+  uncertainties: string[]
+}
+interface AuthorityObservation {
+  adapter: 'codex-0.155.1/reporter-0.1.0/authority-1'
+  receipts: { id: string; digest: string }[]
+  inventory: string[]
+  directories: Record<string, SourceStamp>
+  sources: FileObservation[]
+  authority: Record<string, ReceiptAuthority>
+  coverage: 'complete' | 'incomplete'
+  uncertainties: string[]
+}
 class SourceChangedError extends Error {}
-class ReceiptConflictError extends Error {
-  constructor(readonly receiptId: string) {
-    super('Multiple terminal closures match this receipt.')
-  }
-}
+class InspectionLimitError extends Error {}
 interface Preview {
+  observation: AuthorityObservation
   match: Match
   revision: number
+}
+
+/** Both review and commit evaluate the same sealed authority and Dataset rules. */
+export function eligibility(
+  observation: Pick<AuthorityObservation, 'authority' | 'uncertainties' | 'coverage'>,
+  receipt: Receipt,
+  data: Dataset
+): { status: 'ready' | 'blocked' | 'already imported'; reason?: string; match?: Match } {
+  if (data.runs.some((run) => run.id === `codex_${receipt.report.receiptId}`))
+    return { status: 'already imported' }
+  const state = observation.authority[receipt.report.receiptId] ?? emptyAuthority()
+  if (state.conflicts.length) return { status: 'blocked', reason: state.conflicts.join(' ') }
+  const uncertainties = [...observation.uncertainties, ...state.uncertainties]
+  if (observation.coverage !== 'complete' || uncertainties.length)
+    return {
+      status: 'blocked',
+      reason: `Rollout search incomplete. ${uncertainties.slice(0, 3).join(' ')}`
+    }
+  if (state.cardinality !== 'unique' || !state.first)
+    return { status: 'blocked', reason: 'No verified closed Codex turn found.' }
+  if (!data.slices.some((slice) => slice.id === receipt.report.sliceId))
+    return {
+      status: 'blocked',
+      reason: 'Create or import the matching Dataset Slice first.',
+      match: state.first
+    }
+  return { status: 'ready', match: state.first }
 }
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -241,7 +324,8 @@ async function fixedFile(path: string, max: number): Promise<Buffer> {
       after.dev !== opened.dev ||
       after.ino !== opened.ino ||
       after.size !== opened.size ||
-      after.mtimeMs !== opened.mtimeMs
+      after.mtimeMs !== opened.mtimeMs ||
+      after.ctimeMs !== opened.ctimeMs
     )
       throw new Error('Source changed during discovery.')
     return bytes.subarray(0, count)
@@ -274,27 +358,15 @@ export function installedReporter(): Reporter {
   }
   throw new Error('Installed pennyReporter was not found on PATH.')
 }
-export async function rolloutPaths(home: string, receipts: Receipt[]): Promise<string[]> {
+export async function rolloutPaths(
+  home: string,
+  directories: Record<string, SourceStamp> = {}
+): Promise<string[]> {
   const paths: string[] = []
   let entriesSeen = 0
-  const dates = new Set<string>()
-  let earliestReceipt = Number.POSITIVE_INFINITY
-  for (const receipt of receipts) {
-    const stamp = receipt.report.receiptId.slice(4, 12)
-    const day = Date.UTC(
-      Number(stamp.slice(0, 4)),
-      Number(stamp.slice(4, 6)) - 1,
-      Number(stamp.slice(6, 8))
-    )
-    const issuedAt = Date.parse(
-      `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T${receipt.report.receiptId.slice(13, 15)}:${receipt.report.receiptId.slice(15, 17)}:${receipt.report.receiptId.slice(17, 19)}Z`
-    )
-    if (Number.isFinite(issuedAt)) earliestReceipt = Math.min(earliestReceipt, issuedAt)
-    for (const shift of [-1, 0, 1])
-      dates.add(new Date(day + shift * 86_400_000).toISOString().slice(0, 10))
-  }
   const root = await directory(home)
   if (!root) return paths
+  directories[root] = stamp(await lstat(root))
   for (const name of ['sessions', 'archived_sessions']) {
     const base = await directory(join(root, name))
     if (!base || !inside(root, base)) continue
@@ -302,6 +374,7 @@ export async function rolloutPaths(home: string, receipts: Receipt[]): Promise<s
       if (depth > 4) throw new Error('Codex session tree exceeds supported depth.')
       if ((await realpath(at)) !== at || !inside(base, at))
         throw new Error('Codex session directory changed or escaped its root.')
+      directories[at] = stamp(await lstat(at))
       const entries = (await readdir(at, { withFileTypes: true })).sort((a, b) =>
         a.name.localeCompare(b.name)
       )
@@ -314,11 +387,6 @@ export async function rolloutPaths(home: string, receipts: Receipt[]): Promise<s
         if (entry.isDirectory()) await walk(child, depth + 1)
         else if (entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) {
           if (!entry.isFile()) throw new Error('Nonregular rollout source.')
-          const info = await lstat(child)
-          const dateHint = [...dates].some((date) => entry.name.startsWith(`rollout-${date}`))
-          // A resumed session may retain an old filename. Its last write must still
-          // be near or after the receipt publication that precedes the final report.
-          if (!dateHint && info.mtimeMs < earliestReceipt - 86_400_000) continue
           if (paths.length >= MAX_FILES)
             throw new Error('Relevant Codex rollout file count exceeds limit.')
           paths.push(child)
@@ -429,7 +497,7 @@ export async function scanFile(
   repo: string,
   reporter: Reporter,
   budget: { bytes: number; lines: number }
-): Promise<Match[]> {
+): Promise<FileObservation> {
   if ((await realpath(file)) !== file) throw new Error('Rollout path uses a symlink.')
   const before = await lstat(file)
   if (!before.isFile() || before.size > MAX_FILE_BYTES)
@@ -445,48 +513,63 @@ export async function scanFile(
   let prior: Usage | undefined
   let tasks = 0
   let turn: Turn | undefined
-  const results: Match[] = []
-  const mentioned = new Set<string>()
-  const untrustedMatches = new Set<string>()
-  let scanError: Error | undefined
-  let fullyInspected = false
+  const authority: Record<string, ReceiptAuthority> = Object.fromEntries(
+    [...receipts.keys()].map((id) => [id, emptyAuthority()])
+  )
+  let uncertainties: string[] = []
+  let unrelated = false
+  let turnError: string | undefined
+  const turnReceipts = new Set<string>()
   let sourceDevice = 0
   let sourceInode = 0
+  const uncertain = (id: string, reason: string): void => {
+    authority[id] = reduceAuthority(authority[id], { kind: 'uncertain', reason })
+  }
   const recordError = (error: Error): void => {
-    if (error instanceof UnrelatedRolloutError) throw error
-    if (!scanError || error instanceof ReceiptConflictError) scanError = error
-    if (results.length) {
-      // A bad resumed turn must not hide a subsequent independent closure.
-      turn = undefined
-      prior = undefined
-    }
+    if (error instanceof InspectionLimitError) throw error
+    turnError ??= error.message
+    for (const id of turnReceipts) uncertain(id, error.message)
+    prior = undefined
   }
   const processLine = (line: Buffer): void => {
     lineNumber++
     budget.lines++
     if (lineNumber > MAX_LINES || budget.lines > MAX_LINES * MAX_FILES)
-      throw new Error('Rollout record limit exceeded.')
+      throw new InspectionLimitError('Rollout record limit exceeded.')
     if (!line.length) return
     const raw = line.toString('utf8')
-    for (const receiptId of receipts.keys()) if (raw.includes(receiptId)) mentioned.add(receiptId)
     let record: unknown
     try {
       record = JSON.parse(raw)
     } catch {
-      throw new Error('Malformed Codex rollout JSONL.')
+      uncertainties = diagnostic(
+        uncertainties,
+        'Malformed Codex rollout JSONL; authority coverage is incomplete.'
+      )
+      recordError(new Error('Malformed Codex rollout JSONL.'))
+      return
     }
     if (!object(record) || !object(record.payload)) return
     const payload = record.payload
     if (record.type === 'session_meta') {
-      if (Object.keys(meta).length) throw new Error('Duplicate Codex session metadata.')
+      if (Object.keys(meta).length) {
+        uncertainties = diagnostic(uncertainties, 'Duplicate Codex session metadata.')
+        return
+      }
       meta = payload
       const cwd = safeText(payload.cwd, 4096)
-      if (!cwd || !inside(repo, resolve(cwd)))
-        throw new UnrelatedRolloutError('Rollout working directory is outside PennyTel.')
+      if (!cwd)
+        uncertainties = diagnostic(uncertainties, 'Invalid Codex session working directory.')
+      unrelated = Boolean(cwd && !inside(repo, resolve(cwd)))
+    } else if (unrelated) {
+      return
     } else if (record.type === 'event_msg' && payload.type === 'task_started') {
       if (!safeText(meta.session_id ?? meta.id) || !safeText(meta.cwd, 4096))
         throw new Error('Task has no valid Codex session identity or working directory.')
-      if (turn) throw new Error('Overlapping Codex task boundaries.')
+      const overlap = turn && !turnError ? 'Overlapping Codex task boundaries.' : undefined
+      if (turn) recordError(new Error('Overlapping Codex task boundaries.'))
+      turnReceipts.clear()
+      turnError = overlap
       const id = safeText(payload.turn_id)
       if (!id) throw new Error('Task start has no valid turn identity.')
       tasks++
@@ -578,8 +661,9 @@ export async function scanFile(
         prior = total
         if (turn) turn.total = total
       }
-    } else if (record.type === 'response_item' && turn) {
-      if (payload.type === 'function_call' || payload.type === 'custom_tool_call') turn.toolCalls++
+    } else if (record.type === 'response_item') {
+      if (turn && (payload.type === 'function_call' || payload.type === 'custom_tool_call'))
+        turn.toolCalls++
       if (
         payload.type === 'message' &&
         payload.role === 'assistant' &&
@@ -597,14 +681,30 @@ export async function scanFile(
           try {
             extracted = reporter.extractTerminalBlock(message)
           } catch {
-            turn.contradictory = true
+            if (turn) turn.contradictory = true
             return
           }
-          turn.terminalCount++
-          if (turn.terminalCount > 1) turn.contradictory = true
+          if (turn) {
+            turn.terminalCount++
+            if (turn.terminalCount > 1) turn.contradictory = true
+          }
           const receipt = receipts.get(extracted.report.receiptId)
           if (receipt) {
-            reporter.matchTerminalBlockToReceipt(message, receipt.text)
+            turnReceipts.add(receipt.report.receiptId)
+            if (!turn || turnError) {
+              uncertain(
+                receipt.report.receiptId,
+                turnError ?? 'Terminal report has no valid task boundary.'
+              )
+              return
+            }
+            try {
+              reporter.matchTerminalBlockToReceipt(message, receipt.text)
+            } catch (error) {
+              // Receipt-specific disagreement cannot change another turn's counters.
+              uncertain(receipt.report.receiptId, (error as Error).message)
+              return
+            }
             if (turn.final) turn.contradictory = true
             else turn.final = { receipt, text: message }
           }
@@ -613,31 +713,37 @@ export async function scanFile(
     } else if (record.type === 'event_msg' && payload.type === 'task_complete') {
       if (!turn || payload.turn_id !== turn.id)
         throw new Error('Task completion identity contradicts start.')
-      if (turn.final) {
-        if (turn.contradictory || turn.models.size > 1 || turn.efforts.size > 1)
-          throw new Error('Matched turn contains contradictory terminal/model/effort evidence.')
-        const { run, warnings } = derive(turn.final.receipt, turn, meta, file, payload)
-        if (
-          results.some(
-            (match) => match.receipt.report.receiptId === turn!.final!.receipt.report.receiptId
-          )
+      if (turn.contradictory || turn.models.size > 1 || turn.efforts.size > 1)
+        recordError(
+          new Error('Matched turn contains contradictory terminal/model/effort evidence.')
         )
-          throw new ReceiptConflictError(turn.final.receipt.report.receiptId)
-        results.push({
-          receipt: turn.final.receipt,
-          run,
-          path: file,
-          prefixBytes: offset,
-          prefixHash: hash.copy().digest('hex'),
-          sourceDevice,
-          sourceInode,
-          warnings
-        })
+      if (turn.final && !turnError) {
+        const id = turn.final.receipt.report.receiptId
+        try {
+          const { run, warnings } = derive(turn.final.receipt, turn, meta, file, payload)
+          authority[id] = reduceAuthority(authority[id], {
+            kind: 'closure',
+            match: {
+              receipt: turn.final.receipt,
+              run,
+              path: file,
+              prefixBytes: offset,
+              prefixHash: hash.copy().digest('hex'),
+              sourceDevice,
+              sourceInode,
+              warnings
+            }
+          })
+        } catch (error) {
+          uncertain(id, (error as Error).message)
+        }
       }
       // A later task may start with a reliable baseline only if the immediately
       // preceding task ended with a valid cumulative snapshot.
-      prior = !turn.invalidUsage && turn.total ? turn.total : undefined
+      prior = !turnError && !turn.invalidUsage && turn.total ? turn.total : undefined
       turn = undefined
+      turnError = undefined
+      turnReceipts.clear()
     }
   }
   try {
@@ -649,9 +755,9 @@ export async function scanFile(
       !Number.isSafeInteger(opened.ino) ||
       opened.dev !== before.dev ||
       opened.ino !== before.ino ||
-      opened.size !== before.size
+      !sameStamp(opened, before)
     )
-      throw new Error('Rollout changed during discovery.')
+      throw new SourceChangedError('Codex closure evidence changed during capture.')
     sourceDevice = opened.dev
     sourceInode = opened.ino
     const chunk = Buffer.alloc(64 * 1024)
@@ -671,20 +777,10 @@ export async function scanFile(
         const complete = bytes.subarray(start, i + 1)
         hash.update(complete)
         offset += complete.length
-        if (scanError && !results.length) {
-          const raw = line.toString('utf8')
-          for (const receiptId of receipts.keys())
-            if (raw.includes(receiptId)) mentioned.add(receiptId)
-        } else {
-          try {
-            const previousCount = results.length
-            processLine(line)
-            if (scanError)
-              for (const match of results.slice(previousCount))
-                untrustedMatches.add(match.receipt.report.receiptId)
-          } catch (error) {
-            recordError(error as Error)
-          }
+        try {
+          processLine(line)
+        } catch (error) {
+          recordError(error as Error)
         }
         start = i + 1
       }
@@ -694,115 +790,53 @@ export async function scanFile(
         if (pending.length) {
           hash.update(pending)
           offset += pending.length
-          if (scanError && !results.length) {
-            const raw = pending.toString('utf8')
-            for (const receiptId of receipts.keys())
-              if (raw.includes(receiptId)) mentioned.add(receiptId)
-          } else {
-            try {
-              const previousCount = results.length
-              processLine(pending)
-              if (scanError)
-                for (const match of results.slice(previousCount))
-                  untrustedMatches.add(match.receipt.report.receiptId)
-            } catch (error) {
-              recordError(error as Error)
-            }
+          try {
+            processLine(pending)
+          } catch (error) {
+            recordError(error as Error)
           }
           pending = Buffer.alloc(0)
         }
       }
     }
-    if (results.length) {
-      const sameSnapshot = (left: typeof opened, right: typeof opened): boolean =>
-        left.dev === right.dev &&
-        left.ino === right.ino &&
-        left.size === right.size &&
-        left.mtimeMs === right.mtimeMs &&
-        left.ctimeMs === right.ctimeMs
-      let verified = false
-      for (let attempt = 0; attempt < 3 && !verified; attempt++) {
-        const start = await fd.stat()
-        const pathStart = await lstat(file)
-        if (
-          (await realpath(file)) !== file ||
-          start.dev !== opened.dev ||
-          start.ino !== opened.ino ||
-          pathStart.dev !== opened.dev ||
-          pathStart.ino !== opened.ino ||
-          start.size < before.size ||
-          pathStart.size < before.size
-        )
-          throw new SourceChangedError('Rollout changed during discovery.')
-        if (!sameSnapshot(start, pathStart)) continue
-        const verifiedHash = createHash('sha256')
-        const chunk = Buffer.alloc(64 * 1024)
-        let verifiedBytes = 0
-        for (const match of results) {
-          while (verifiedBytes < match.prefixBytes) {
-            const count = Math.min(chunk.length, match.prefixBytes - verifiedBytes)
-            if (budget.bytes + count > MAX_TOTAL_BYTES)
-              throw new Error('Discovery exceeds the 128 MB read limit.')
-            const read = await fd.read(chunk, 0, count, verifiedBytes)
-            if (!read.bytesRead) throw new SourceChangedError('Rollout changed during discovery.')
-            verifiedHash.update(chunk.subarray(0, read.bytesRead))
-            verifiedBytes += read.bytesRead
-            budget.bytes += read.bytesRead
-          }
-          if (verifiedHash.copy().digest('hex') !== match.prefixHash)
-            throw new SourceChangedError('Rollout closure evidence changed during discovery.')
-        }
-        const end = await fd.stat()
-        const pathEnd = await lstat(file)
-        if (
-          (await realpath(file)) !== file ||
-          end.dev !== opened.dev ||
-          end.ino !== opened.ino ||
-          pathEnd.dev !== opened.dev ||
-          pathEnd.ino !== opened.ino ||
-          end.size < before.size ||
-          pathEnd.size < before.size
-        )
-          throw new SourceChangedError('Rollout changed during discovery.')
-        verified = sameSnapshot(start, end) && sameSnapshot(end, pathEnd)
-      }
-      if (!verified) throw new SourceChangedError('Rollout changed during discovery.')
-    } else {
-      const after = await lstat(file)
+    // Verify the entire parsed horizon, including suffixes and sources with no
+    // target closure. Growth is a changed capture, never an unclassified extension.
+    const verifyIdentity = async (): Promise<void> => {
       if (
         (await realpath(file)) !== file ||
-        after.dev !== opened.dev ||
-        after.ino !== opened.ino ||
-        after.size !== before.size ||
-        after.mtimeMs !== opened.mtimeMs ||
-        after.ctimeMs !== opened.ctimeMs
+        !sameStamp(opened, await fd.stat()) ||
+        !sameStamp(opened, await lstat(file))
       )
-        throw new SourceChangedError('Rollout changed during discovery.')
+        throw new SourceChangedError('Codex closure evidence changed during capture.')
     }
-    fullyInspected = true
-    if (scanError) throw scanError
-    return results
-  } catch (error) {
-    if (error instanceof UnrelatedRolloutError) throw error
-    const message = (error as Error).message
-    const canUseMatches = fullyInspected && !(error instanceof SourceChangedError)
-    const affected =
-      error instanceof ReceiptConflictError
-        ? new Set([error.receiptId])
-        : !canUseMatches
-          ? undefined
-          : results.length
-            ? new Set(
-                [...mentioned, ...untrustedMatches].filter(
-                  (id) =>
-                    !results.some((match) => match.receipt.report.receiptId === id) ||
-                    untrustedMatches.has(id)
-                )
-              )
-            : mentioned.size || fullyInspected
-              ? mentioned
-              : undefined
-    throw new PartialScanError(message, results, affected, canUseMatches)
+    await verifyIdentity()
+    const digest = hash.digest('hex')
+    const verified = createHash('sha256')
+    let position = 0
+    while (position < opened.size) {
+      const count = Math.min(chunk.length, opened.size - position)
+      if (budget.bytes + count > MAX_TOTAL_BYTES)
+        throw new Error('Discovery exceeds the 128 MB read limit.')
+      const read = await fd.read(chunk, 0, count, position)
+      if (!read.bytesRead)
+        throw new SourceChangedError('Codex closure evidence changed during capture.')
+      verified.update(chunk.subarray(0, read.bytesRead))
+      position += read.bytesRead
+      budget.bytes += read.bytesRead
+    }
+    if (verified.digest('hex') !== digest)
+      throw new SourceChangedError('Codex closure evidence changed during capture.')
+    await verifyIdentity()
+    if (turn?.final)
+      uncertain(turn.final.receipt.report.receiptId, 'Terminal report has no task completion.')
+    return freeze({
+      path: file,
+      identity: stamp(opened),
+      inspectedBytes: offset,
+      digest,
+      authority,
+      uncertainties
+    })
   } finally {
     await fd.close()
   }
@@ -877,71 +911,96 @@ export class CodexIntake {
     return { valid, rejected }
   }
 
-  async discover(): Promise<CodexIntakeCandidate[]> {
-    this.previews.clear()
-    const { data } = await this.store.load()
-    const { valid, rejected } = await this.receipts()
-    const pending = valid.filter(
-      (r) => !data.runs.some((run) => run.id === `codex_${r.report.receiptId}`)
+  private async capture(receipts: Receipt[]): Promise<AuthorityObservation> {
+    const authority: Record<string, ReceiptAuthority> = Object.fromEntries(
+      receipts.map((receipt) => [receipt.report.receiptId, emptyAuthority()])
     )
-    const matches = new Map<string, Match[]>()
-    const failures = new Map<string, string[]>()
-    const addFailure = (message: string, excluded = new Set<string>()): void => {
-      for (const receipt of pending) {
-        if (excluded.has(receipt.report.receiptId)) continue
-        failures.set(receipt.report.receiptId, [
-          ...(failures.get(receipt.report.receiptId) ?? []),
-          message
-        ])
-      }
+    const sources: FileObservation[] = []
+    let uncertainties: string[] = []
+    let inventory: string[] = []
+    const directories: Record<string, SourceStamp> = {}
+    const files = async (captured: Record<string, SourceStamp>): Promise<string[]> => {
+      const paths = this.testSources?.rolloutFiles
+        ? [...this.testSources.rolloutFiles].sort()
+        : await rolloutPaths(this.codexHome, captured)
+      if (paths.length > MAX_FILES)
+        throw new Error('Relevant Codex rollout file count exceeds limit.')
+      return paths
     }
-    const budget = { bytes: 0, lines: 0 }
-    if (pending.length) {
-      const all = new Map(pending.map((r) => [r.report.receiptId, r]))
-      let files: string[]
-      try {
-        files = this.testSources?.rolloutFiles ?? (await rolloutPaths(this.codexHome, pending))
-      } catch (error) {
-        files = []
-        addFailure((error as Error).message)
-      }
-      for (const path of files) {
+    try {
+      inventory = await files(directories)
+      const budget = { bytes: 0, lines: 0 }
+      const all = new Map(receipts.map((receipt) => [receipt.report.receiptId, receipt]))
+      for (const path of inventory) {
         try {
-          const found = await scanFile(
+          const source = await scanFile(
             path,
             all,
             this.testSources?.sourceRepositoryRoot ?? resolve(this.repo),
             this.protocol(),
             budget
           )
-          for (const match of found)
-            matches.set(match.receipt.report.receiptId, [
-              ...(matches.get(match.receipt.report.receiptId) ?? []),
-              match
-            ])
-        } catch (error) {
-          if (error instanceof UnrelatedRolloutError) continue
-          const partial =
-            error instanceof PartialScanError && error.canUseMatches ? error.matches : []
-          for (const match of partial)
-            matches.set(match.receipt.report.receiptId, [
-              ...(matches.get(match.receipt.report.receiptId) ?? []),
-              match
-            ])
-          const affected =
-            error instanceof PartialScanError && error.canUseMatches ? error.affected : undefined
-          const protectedIds = new Set(partial.map((match) => match.receipt.report.receiptId))
-          for (const receipt of pending) {
-            const id = receipt.report.receiptId
-            if (affected ? !affected.has(id) : protectedIds.has(id)) continue
-            failures.set(id, [
-              ...(failures.get(id) ?? []),
-              `${basename(path)}: ${(error as Error).message}`
-            ])
+          sources.push(source)
+          for (const reason of source.uncertainties)
+            uncertainties = diagnostic(uncertainties, reason)
+          for (const [id, state] of Object.entries(source.authority)) {
+            if (state.first)
+              authority[id] = reduceAuthority(authority[id], {
+                kind: 'closure',
+                match: state.first
+              })
+            if (state.cardinality === 'multiple' && state.first)
+              authority[id] = reduceAuthority(authority[id], {
+                kind: 'closure',
+                match: state.first
+              })
+            for (const reason of state.uncertainties)
+              authority[id] = reduceAuthority(authority[id], { kind: 'uncertain', reason })
           }
+        } catch (error) {
+          uncertainties = diagnostic(uncertainties, (error as Error).message)
         }
       }
+      // Revalidate receipts and the inventory as part of capture. This observation
+      // set is deliberately not an atomic live-filesystem snapshot.
+      const current = await this.receipts()
+      const identities = (values: Receipt[]): string =>
+        JSON.stringify(values.map((r) => [r.report.receiptId, r.digest]))
+      if (identities(current.valid) !== identities(receipts))
+        throw new SourceChangedError('Receipt changed during capture; rediscover before import.')
+      if (JSON.stringify(await files({})) !== JSON.stringify(inventory))
+        throw new SourceChangedError('Codex source inventory changed during capture.')
+      for (const source of sources) {
+        if (
+          (await realpath(source.path)) !== source.path ||
+          !sameStamp(source.identity, await lstat(source.path))
+        )
+          throw new SourceChangedError('Codex closure evidence changed during capture.')
+      }
+      for (const [path, identity] of Object.entries(directories)) {
+        if ((await realpath(path)) !== path || !sameStamp(identity, await lstat(path)))
+          throw new SourceChangedError('Codex source inventory changed during capture.')
+      }
+    } catch (error) {
+      uncertainties = diagnostic(uncertainties, (error as Error).message)
     }
+    return freeze({
+      adapter: 'codex-0.155.1/reporter-0.1.0/authority-1',
+      receipts: receipts.map((r) => ({ id: r.report.receiptId, digest: r.digest })),
+      inventory,
+      directories,
+      sources,
+      authority,
+      coverage: uncertainties.length ? 'incomplete' : 'complete',
+      uncertainties
+    })
+  }
+
+  async discover(): Promise<CodexIntakeCandidate[]> {
+    this.previews.clear()
+    const { data } = await this.store.load()
+    const { valid, rejected } = await this.receipts()
+    const observation = await this.capture(valid)
     return [
       ...rejected,
       ...valid.map((receipt): CodexIntakeCandidate => {
@@ -956,36 +1015,20 @@ export class CodexIntake {
           ...(report.candidate ? { candidate: report.candidate } : {})
         }
         const base = { receiptId: report.receiptId, report: metadata }
-        if (data.runs.some((r) => r.id === `codex_${report.receiptId}`))
-          return { ...base, status: 'already imported' }
-        const found = matches.get(report.receiptId) ?? []
-        const sourceFailures = failures.get(report.receiptId) ?? []
-        if (sourceFailures.length)
+        const decision = eligibility(observation, receipt, data)
+        if (decision.status !== 'ready' || !decision.match)
           return {
             ...base,
-            status: 'blocked',
-            reason: `Rollout search incomplete. ${sourceFailures.slice(0, 3).join(' ')}`
+            status: decision.status,
+            reason: decision.reason,
+            ...(decision.match
+              ? { run: decision.match.run, warnings: decision.match.warnings }
+              : {})
           }
-        if (found.length !== 1)
-          return {
-            ...base,
-            status: 'blocked',
-            reason:
-              found.length > 1
-                ? 'Multiple rollouts match this receipt.'
-                : 'No verified closed Codex turn found.'
-          }
-        if (!data.slices.some((s) => s.id === report.sliceId))
-          return {
-            ...base,
-            status: 'blocked',
-            reason: 'Create or import the matching Dataset Slice first.',
-            run: found[0].run,
-            warnings: found[0].warnings
-          }
+        const match = decision.match
         const token = randomUUID()
-        this.previews.set(token, { match: found[0], revision: data.revision })
-        const run = found[0].run
+        this.previews.set(token, { observation, match, revision: data.revision })
+        const run = match.run
         const unknowns = (
           [
             'model',
@@ -1022,7 +1065,7 @@ export class CodexIntake {
               : evidence?.[key as keyof typeof evidence]
           if (value === undefined) unknowns.push(`executionEvidence.${key}`)
         }
-        return { ...base, status: 'ready', token, run, unknowns, warnings: found[0].warnings }
+        return { ...base, status: 'ready', token, run, unknowns, warnings: match.warnings }
       })
     ]
   }
@@ -1042,34 +1085,13 @@ export class CodexIntake {
     )
     if (!freshReceipt || freshReceipt.digest !== selected.match.receipt.digest)
       throw new Error('Receipt changed; rediscover before import.')
-    const budget = { bytes: 0, lines: 0 }
-    const files =
-      this.testSources?.rolloutFiles ?? (await rolloutPaths(this.codexHome, [freshReceipt]))
-    const found: Match[] = []
-    for (const file of files) {
-      try {
-        found.push(
-          ...(await scanFile(
-            file,
-            new Map([[freshReceipt.report.receiptId, freshReceipt]]),
-            this.testSources?.sourceRepositoryRoot ?? resolve(this.repo),
-            this.protocol(),
-            budget
-          ))
-        )
-      } catch (error) {
-        if (error instanceof UnrelatedRolloutError) continue
-        if (!(error instanceof PartialScanError) || !error.canUseMatches || !error.affected)
-          throw error
-        if (error.affected.has(freshReceipt.report.receiptId)) throw error
-        found.push(...error.matches)
-      }
-    }
-    if (found.length !== 1 || found[0].path !== selected.match.path)
-      throw new Error('Codex receipt match became missing or ambiguous; rediscover before import.')
-    const fresh = found[0]
+    const observation = await this.capture(valid)
+    const decision = eligibility(observation, freshReceipt, data)
+    if (decision.status !== 'ready' || !decision.match)
+      throw new Error(decision.reason ?? 'Deterministic Run ID already exists; import refused.')
+    const fresh = decision.match
     if (
-      !fresh ||
+      fresh.path !== selected.match.path ||
       fresh.sourceDevice !== selected.match.sourceDevice ||
       fresh.sourceInode !== selected.match.sourceInode ||
       fresh.prefixBytes !== selected.match.prefixBytes ||
@@ -1077,10 +1099,12 @@ export class CodexIntake {
       JSON.stringify(fresh.run) !== JSON.stringify(selected.match.run)
     )
       throw new Error('Codex closure evidence changed; rediscover before import.')
+    // The complete sealed observation above is the approved external authority
+    // cutoff. Later producer writes do not reopen this decision during storage IO.
     return this.store.mutate({
       kind: 'save',
       table: 'runs',
-      record: fresh.run,
+      record: selected.match.run,
       revision: selected.revision
     })
   }

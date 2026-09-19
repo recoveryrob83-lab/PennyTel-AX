@@ -1,11 +1,22 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import * as fs from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { statSync, utimesSync, writeFileSync } from 'node:fs'
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { appendFileSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  truncate,
+  writeFile
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
   CodexIntake,
+  eligibility,
   installedReporter,
   rolloutPaths,
   scanFile,
@@ -19,6 +30,10 @@ import {
   type Run
 } from '../src/shared/types'
 import type { ProductionStore } from '../src/main/production-store'
+
+vi.mock('node:fs/promises', async (original) => ({
+  ...(await original<typeof import('node:fs/promises')>())
+}))
 
 const reporter = installedReporter() as ReturnType<typeof installedReporter> & {
   createReceipt(report: object): object
@@ -83,7 +98,12 @@ async function scanRecords(records: RolloutRecord[]): Promise<Run | undefined> {
       bytes: 0,
       lines: 0
     })
-    return matches[0]?.run
+    const state = matches.authority[receiptId]
+    if (matches.uncertainties.length || state.uncertainties.length || state.conflicts.length)
+      throw new Error(
+        [...matches.uncertainties, ...state.uncertainties, ...state.conflicts].join(' ')
+      )
+    return state.first?.run
   })
 }
 
@@ -119,8 +139,8 @@ describe('current Codex 0.155.1 closed-turn adapter', () => {
       reporter,
       { bytes: 0, lines: 0 }
     )
-    expect(matches).toHaveLength(1)
-    const run = matches[0].run
+    expect(matches.authority[receiptId].cardinality).toBe('unique')
+    const run = matches.authority[receiptId].first!.run
     expect(run.id).toBe(`codex_${valid.report.receiptId}`)
     expect(run).toMatchObject({
       inputTokens: 60,
@@ -154,7 +174,7 @@ describe('current Codex 0.155.1 closed-turn adapter', () => {
         bytes: 0,
         lines: 0
       })
-    ).toEqual([])
+    ).toMatchObject({ authority: { [wrong.report.receiptId]: { cardinality: 'none' } } })
   })
 
   it('rejects a terminal block whose receipt content was altered under the same identity', async () => {
@@ -164,7 +184,11 @@ describe('current Codex 0.155.1 closed-turn adapter', () => {
         bytes: 0,
         lines: 0
       })
-    ).rejects.toThrow('does not match receipt')
+    ).resolves.toMatchObject({
+      authority: {
+        [receiptId]: { uncertainties: [expect.stringContaining('does not match receipt')] }
+      }
+    })
   })
 
   it('fails closed on incompatible working directories and nonregular sources', async () => {
@@ -174,7 +198,7 @@ describe('current Codex 0.155.1 closed-turn adapter', () => {
         bytes: 0,
         lines: 0
       })
-    ).rejects.toThrow('outside PennyTel')
+    ).resolves.toMatchObject({ authority: { [receiptId]: { cardinality: 'none' } } })
     await expect(
       scanFile('/dev/null', new Map([[valid.report.receiptId, valid]]), '/synthetic', reporter, {
         bytes: 0,
@@ -184,8 +208,7 @@ describe('current Codex 0.155.1 closed-turn adapter', () => {
   })
 
   it('enumerates only fixed active and archived Codex session roots', async () => {
-    const valid = receipt('pr1_20260919T120000000Z_11111111111111111111111111111111')
-    const paths = await rolloutPaths(resolve('tests/fixtures/codex-home'), [valid])
+    const paths = await rolloutPaths(resolve('tests/fixtures/codex-home'))
     expect(paths).toHaveLength(2)
     expect(paths.some((path) => path.includes('/sessions/2026/09/19/'))).toBe(true)
     expect(paths.some((path) => path.includes('/archived_sessions/'))).toBe(true)
@@ -603,7 +626,9 @@ describe('S13 accepted repair regressions', () => {
       const status = async (id: string): Promise<CodexIntakeCandidate> =>
         (await intake.discover()).find((item) => item.receiptId === id)!
       const ready = await status(receiptId)
-      expect(ready.status).toBe('ready')
+      expect(ready.status).toBe('blocked')
+      expect(ready.reason).toContain('incomplete')
+      await writeFile(malformed, lines([fixture[0], started('unrelated'), completed('unrelated')]))
       expect((await status(otherId)).status).toBe('blocked')
       const commitReady = await status(receiptId)
       await intake.commit(commitReady.token!)
@@ -639,12 +664,445 @@ describe('S13 accepted repair regressions', () => {
       expect((await status(receiptId)).status).toBe('blocked')
       expect((await status(otherId)).status).toBe('blocked')
 
-      // A broken source that mentions the first receipt cannot poison a separate
-      // valid closure for the second pending receipt.
+      // Unparseable bytes cannot prove uniqueness even for another receipt.
       await writeFile(foreign, lines(fixture.slice(0, 10)).replaceAll(receiptId, otherId))
       const isolated = await status(otherId)
-      expect(isolated.status).toBe('ready')
+      expect(isolated.status).toBe('blocked')
       expect((await status(receiptId)).status).toBe('blocked')
+    })
+  })
+})
+
+const otherReceiptId = 'pr1_20260919T120000004Z_44444444444444444444444444444444'
+interface AuthorityHarness {
+  intake: CodexIntake
+  discover: (id?: string) => Promise<CodexIntakeCandidate>
+  original: string
+  rollout: string
+  closure: (id?: string, turn?: string) => string
+  receiptDirectory: string
+  writes: Mutation[]
+  sources: { receiptDirectory: string; rolloutFiles: string[]; sourceRepositoryRoot: string }
+  home: string
+}
+async function authorityHarness(
+  dir: string,
+  options: {
+    protocol?: ReturnType<typeof installedReporter>
+    onPublish?: () => void
+    realInventory?: boolean
+  } = {}
+): Promise<AuthorityHarness> {
+  const receiptDirectory = join(dir, '.pennyos', 'runtime', 'receipts')
+  await mkdir(receiptDirectory, { recursive: true })
+  await mkdir(join(dir, 'pennyos', 'slices'), { recursive: true })
+  await writeFile(
+    join(dir, 'pennyos', 'project.json'),
+    JSON.stringify({ projectId: 'pennytel', project: 'PennyTel' })
+  )
+  await writeFile(join(dir, 'pennyos', 'slices', 'S13.json'), JSON.stringify({ sliceId: 'S13' }))
+  await writeFile(join(receiptDirectory, `${receiptId}.json`), receipt(receiptId).text)
+  const home = join(dir, 'codex')
+  await mkdir(join(home, 'sessions'), { recursive: true })
+  const rollout = join(home, 'sessions', 'rollout-source.jsonl')
+  const fixture = await fixtureRecords()
+  const original = lines(fixture.slice(0, 10)).replaceAll('/synthetic', dir)
+  const closure = (id = receiptId, turn = 'later'): string =>
+    lines([
+      started(turn),
+      JSON.parse(JSON.stringify(fixture[8]).replaceAll(receiptId, id)),
+      completed(turn)
+    ])
+  await writeFile(rollout, original)
+  let data: Dataset = { ...emptyDataset(), slices: [{ id: 'S13', title: 'Intake' }] }
+  const writes: Mutation[] = []
+  const store = {
+    load: async () => ({ data: structuredClone(data), path: dir }),
+    mutate: async (command: Mutation) => {
+      options.onPublish?.()
+      expect(command).toMatchObject({ kind: 'save', table: 'runs', revision: data.revision })
+      if (command.kind !== 'save' || command.table !== 'runs')
+        throw new Error('Unexpected mutation')
+      writes.push(command)
+      data = {
+        ...data,
+        revision: data.revision + 1,
+        runs: [...data.runs, structuredClone(command.record as Run)]
+      }
+      return { data: structuredClone(data), path: dir }
+    }
+  } as unknown as ProductionStore
+  const sources = { receiptDirectory, rolloutFiles: [rollout], sourceRepositoryRoot: dir }
+  const intake = new CodexIntake(
+    dir,
+    store,
+    options.protocol ?? reporter,
+    home,
+    options.realInventory ? undefined : sources
+  )
+  const discover = async (id = receiptId): Promise<CodexIntakeCandidate> =>
+    (await intake.discover()).find((candidate) => candidate.receiptId === id)!
+  return { intake, discover, original, rollout, closure, receiptDirectory, writes, sources, home }
+}
+
+afterEach(() => vi.restoreAllMocks())
+
+describe('S13 sealed authority observation regression matrix', () => {
+  it.each(['parse', 'verification'])(
+    'blocks duplicate growth during %s, consumes token, and publishes nothing',
+    async (phase) => {
+      await inTemp(async (dir) => {
+        let append: (() => void) | undefined
+        const protocol = {
+          ...reporter,
+          matchTerminalBlockToReceipt(message: string, text: string) {
+            const result = reporter.matchTerminalBlockToReceipt(message, text)
+            append?.()
+            return result
+          }
+        }
+        const h = await authorityHarness(dir, { protocol })
+        const preview = await h.discover()
+        expect(preview.status).toBe('ready')
+        const grow = (): void => {
+          appendFileSync(h.rollout, h.closure())
+          append = undefined
+        }
+        if (phase === 'parse') append = grow
+        else {
+          const originalOpen = fs.open
+          vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+            const handle = await originalOpen(...args)
+            if (args[0] === h.rollout) {
+              const read = handle.read.bind(handle)
+              let reads = 0
+              handle.read = (async (...params: Parameters<typeof read>) => {
+                if (++reads === 2) grow()
+                return read(...params)
+              }) as typeof handle.read
+            }
+            return handle
+          })
+        }
+        await expect(h.intake.commit(preview.token!)).rejects.toThrow('changed during capture')
+        expect(h.writes).toHaveLength(0)
+        await expect(h.intake.commit(preview.token!)).rejects.toThrow('Discover and review')
+        vi.restoreAllMocks()
+        expect((await h.discover()).reason).toContain('Multiple terminal closures')
+      })
+    }
+  )
+
+  it('rejects an existing suffix rewritten into a duplicate during capture', async () => {
+    await inTemp(async (dir) => {
+      let rewrite: (() => void) | undefined
+      const protocol = {
+        ...reporter,
+        matchTerminalBlockToReceipt(message: string, text: string) {
+          const result = reporter.matchTerminalBlockToReceipt(message, text)
+          rewrite?.()
+          return result
+        }
+      }
+      const h = await authorityHarness(dir, { protocol })
+      const safe = lines([started('later'), completed('later')])
+      await writeFile(h.rollout, h.original + safe)
+      const preview = await h.discover()
+      rewrite = () => {
+        writeFileSync(h.rollout, h.original + h.closure())
+        rewrite = undefined
+      }
+      await expect(h.intake.commit(preview.token!)).rejects.toThrow('changed during capture')
+      expect(h.writes).toHaveLength(0)
+    })
+  })
+
+  it('accepts later writes after the sealed cutoff while preserving the exact reviewed Run', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir, { onPublish: () => afterCutoff?.() })
+      const preview = await h.discover()
+      const afterCutoff = (): void => appendFileSync(h.rollout, h.closure())
+      const saved = await h.intake.commit(preview.token!)
+      expect(saved.data.revision).toBe(1)
+      expect(saved.data.runs).toEqual([preview.run])
+      expect(h.writes).toHaveLength(1)
+      const observed = await scanFile(
+        h.rollout,
+        new Map([[receiptId, receipt(receiptId)]]),
+        dir,
+        reporter,
+        { bytes: 0, lines: 0 }
+      )
+      expect(observed.authority[receiptId].cardinality).toBe('multiple')
+      expect((await h.discover()).status).toBe('already imported')
+    })
+  })
+
+  it.each([false, true])(
+    'accumulates A/B conflicts in either duplicate order (reverse=%s)',
+    async (reverse) => {
+      await inTemp(async (dir) => {
+        const h = await authorityHarness(dir)
+        await writeFile(
+          join(h.receiptDirectory, `${otherReceiptId}.json`),
+          receipt(otherReceiptId).text
+        )
+        const duplicates = reverse ? [otherReceiptId, receiptId] : [receiptId, otherReceiptId]
+        await writeFile(
+          h.rollout,
+          h.original +
+            h.closure(otherReceiptId, 'b') +
+            duplicates.map((id, i) => h.closure(id, `duplicate-${i}`)).join('') +
+            lines([started('bad'), event('task_complete', { turn_id: 'wrong' })])
+        )
+        for (const id of [receiptId, otherReceiptId]) {
+          const candidate = await h.discover(id)
+          expect(candidate.status).toBe('blocked')
+          expect(candidate.reason).toContain('Multiple terminal closures')
+          expect(candidate.token).toBeUndefined()
+        }
+        expect(h.writes).toHaveLength(0)
+      })
+    }
+  )
+
+  it('retains the first measurement and detects duplicates beyond malformed later activity', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir)
+      const preview = await h.discover()
+      await writeFile(
+        h.rollout,
+        h.original + lines([started('broken')]) + '{bad json\n' + h.closure()
+      )
+      const observed = await scanFile(
+        h.rollout,
+        new Map([[receiptId, receipt(receiptId)]]),
+        dir,
+        reporter,
+        { bytes: 0, lines: 0 }
+      )
+      expect(observed.authority[receiptId].cardinality).toBe('multiple')
+      expect(observed.authority[receiptId].first?.run).toEqual(preview.run)
+      expect(observed.uncertainties).not.toHaveLength(0)
+      expect((await h.discover()).reason).toContain('Multiple terminal closures')
+      await expect(h.intake.commit(preview.token!)).rejects.toThrow('Discover and review')
+    })
+  })
+
+  it('evaluates A identically alone or alongside B and freezes all observation fields', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir)
+      await writeFile(
+        h.rollout,
+        h.original + h.closure(otherReceiptId, 'b') + h.closure(otherReceiptId, 'duplicate-b')
+      )
+      const one = await scanFile(
+        h.rollout,
+        new Map([[receiptId, receipt(receiptId)]]),
+        dir,
+        reporter,
+        { bytes: 0, lines: 0 }
+      )
+      const both = await scanFile(
+        h.rollout,
+        new Map([receiptId, otherReceiptId].map((id) => [id, receipt(id)])),
+        dir,
+        reporter,
+        { bytes: 0, lines: 0 }
+      )
+      expect(one.authority[receiptId]).toEqual(both.authority[receiptId])
+      const dataset = { ...emptyDataset(), slices: [{ id: 'S13', title: 'Intake' }] }
+      expect(eligibility({ ...one, coverage: 'complete' }, receipt(receiptId), dataset)).toEqual(
+        eligibility({ ...both, coverage: 'complete' }, receipt(receiptId), dataset)
+      )
+      expect(both.authority[otherReceiptId].cardinality).toBe('multiple')
+      expect(Object.isFrozen(one)).toBe(true)
+      expect(Object.isFrozen(one.authority[receiptId].first?.run.executionEvidence)).toBe(true)
+      expect(one.inspectedBytes).toBe(Buffer.byteLength(await readFile(h.rollout)))
+      expect(one.digest).toBe(
+        createHash('sha256')
+          .update(await readFile(h.rollout))
+          .digest('hex')
+      )
+    })
+  })
+
+  it('does not let another requested receipt change measured cumulative boundaries', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir)
+      const fixture = await fixtureRecords()
+      const a = counters(100, 20, 10, 2)
+      const b = counters(150, 30, 20, 4)
+      const otherFinal = JSON.parse(
+        JSON.stringify(fixture[8]).replaceAll(receiptId, otherReceiptId)
+      )
+      await writeFile(
+        h.rollout,
+        lines([
+          { ...fixture[0], payload: { ...fixture[0].payload, cwd: dir } },
+          started('other'),
+          token(a, a),
+          otherFinal,
+          completed('other'),
+          started('target'),
+          token(b, counters(50, 10, 10, 2)),
+          fixture[8],
+          completed('target')
+        ])
+      )
+      const alone = await scanFile(
+        h.rollout,
+        new Map([[receiptId, receipt(receiptId)]]),
+        dir,
+        reporter,
+        { bytes: 0, lines: 0 }
+      )
+      const together = await scanFile(
+        h.rollout,
+        new Map([
+          [receiptId, receipt(receiptId)],
+          [otherReceiptId, receipt(otherReceiptId, 1)]
+        ]),
+        dir,
+        reporter,
+        { bytes: 0, lines: 0 }
+      )
+      expect(together.authority[otherReceiptId].uncertainties).not.toHaveLength(0)
+      expect(together.authority[receiptId]).toEqual(alone.authority[receiptId])
+      expect(together.authority[receiptId].first?.run.inputTokens).toBe(40)
+    })
+  })
+
+  it('rejects a receipt rewritten during source capture', async () => {
+    await inTemp(async (dir) => {
+      let rewrite: (() => void) | undefined
+      const protocol = {
+        ...reporter,
+        matchTerminalBlockToReceipt(message: string, text: string) {
+          const result = reporter.matchTerminalBlockToReceipt(message, text)
+          rewrite?.()
+          return result
+        }
+      }
+      const h = await authorityHarness(dir, { protocol })
+      const preview = await h.discover()
+      rewrite = () => {
+        writeFileSync(join(h.receiptDirectory, `${receiptId}.json`), receipt(receiptId, 1).text)
+        rewrite = undefined
+      }
+      await expect(h.intake.commit(preview.token!)).rejects.toThrow(
+        'Receipt changed during capture'
+      )
+      expect(h.writes).toHaveLength(0)
+    })
+  })
+
+  it.each(['before', 'during'])(
+    'blocks another-file duplicate introduced %s capture',
+    async (when) => {
+      await inTemp(async (dir) => {
+        let introduce: (() => void) | undefined
+        const protocol = {
+          ...reporter,
+          matchTerminalBlockToReceipt(message: string, text: string) {
+            const result = reporter.matchTerminalBlockToReceipt(message, text)
+            introduce?.()
+            return result
+          }
+        }
+        const h = await authorityHarness(dir, { protocol, realInventory: true })
+        const preview = await h.discover()
+        const create = (): void => {
+          writeFileSync(join(h.home, 'sessions', 'rollout-new.jsonl'), h.original)
+          introduce = undefined
+        }
+        if (when === 'before') create()
+        else introduce = create
+        await expect(h.intake.commit(preview.token!)).rejects.toThrow(
+          when === 'before' ? 'Multiple terminal closures' : 'inventory changed'
+        )
+        expect(h.writes).toHaveLength(0)
+      })
+    }
+  )
+
+  it.each(['receipt', 'truncation', 'symlink', 'incomplete-tail'])(
+    'fails closed for %s before commit',
+    async (change) => {
+      await inTemp(async (dir) => {
+        const h = await authorityHarness(dir)
+        const preview = await h.discover()
+        if (change === 'receipt')
+          await writeFile(join(h.receiptDirectory, `${receiptId}.json`), receipt(receiptId, 1).text)
+        if (change === 'truncation') await truncate(h.rollout, 100)
+        if (change === 'symlink') {
+          await rename(h.rollout, `${h.rollout}.old`)
+          await symlink(`${h.rollout}.old`, h.rollout)
+        }
+        if (change === 'incomplete-tail') appendFileSync(h.rollout, '{broken json')
+        await expect(h.intake.commit(preview.token!)).rejects.toThrow()
+        expect(h.writes).toHaveLength(0)
+      })
+    }
+  )
+
+  it('enforces byte, line, record and file limits without retrying into false uniqueness', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir)
+      const receipts = new Map([[receiptId, receipt(receiptId)]])
+      const length = Buffer.byteLength(h.original)
+      const budget = { bytes: 128_000_000 - length, lines: 0 }
+      await expect(scanFile(h.rollout, receipts, dir, reporter, budget)).rejects.toThrow('128 MB')
+      expect(budget.bytes).toBe(128_000_000)
+      await writeFile(h.rollout, h.original + '\n'.repeat(100_001))
+      await expect(
+        scanFile(h.rollout, receipts, dir, reporter, { bytes: 0, lines: 0 })
+      ).rejects.toThrow('record limit')
+      await writeFile(h.rollout, h.original + 'x'.repeat(256_001))
+      expect((await h.discover()).reason).toContain('256 KB')
+      await truncate(h.rollout, 32_000_001)
+      expect((await h.discover()).reason).toContain('32 MB')
+      h.sources.rolloutFiles = Array.from({ length: 201 }, () => h.rollout)
+      expect((await h.discover()).reason).toContain('file count')
+      expect(h.writes).toHaveLength(0)
+    })
+  })
+
+  it('keeps arbitrary transcript data out of review, publication and diagnostics', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir)
+      const secret = 'PRIVATE_PROMPT_REASONING_TOOL_IMAGE_SENTINEL'
+      await writeFile(
+        h.rollout,
+        h.original +
+          lines([
+            {
+              type: 'response_item',
+              payload: {
+                type: 'message',
+                role: 'user',
+                content: [{ type: 'input_text', text: secret }]
+              }
+            },
+            { type: 'response_item', payload: { type: 'reasoning', encrypted_content: secret } },
+            { type: 'response_item', payload: { type: 'function_call_output', output: secret } }
+          ])
+      )
+      const preview = await h.discover()
+      expect(preview.status).toBe('ready')
+      expect(JSON.stringify(preview)).not.toContain(secret)
+      const saved = await h.intake.commit(preview.token!)
+      expect(JSON.stringify(saved)).not.toContain(secret)
+      expect(JSON.stringify(h.writes)).not.toContain('PENNYOS_TURN_REPORT_V1')
+      appendFileSync(h.rollout, '{' + secret)
+      const blocked = await scanFile(
+        h.rollout,
+        new Map([[receiptId, receipt(receiptId)]]),
+        dir,
+        reporter,
+        { bytes: 0, lines: 0 }
+      )
+      expect(JSON.stringify(blocked.uncertainties)).not.toContain(secret)
     })
   })
 })

@@ -32,7 +32,7 @@ validates receipts and final terminal blocks. It must be on `PATH` when
 discovery runs.
 
 Discovery is operator-triggered and read-only. It considers at most 100 receipts,
-200 relevant rollout files, 32 MB per rollout, 256 KB per line, 100,000 lines per
+200 rollout files across the fixed roots, 32 MB per rollout, 256 KB per line, 100,000 lines per
 file, and 128 MB per operation. Unsupported or changing sources block review
 with a bounded reason. Matching requires a Codex assistant `final_answer` and
 its explicit `task_complete`. Only normalized Run and execution evidence reach
@@ -43,3 +43,23 @@ Run save mutation.
 The deterministic fixture and Electron smoke cover Codex CLI `0.155.1`'s
 observed JSONL event shape. Unknown future authority fields or turn/usage
 semantics are not interpreted as telemetry.
+
+S13 seals a bounded authority observation at commit. It freezes the first valid
+closure's measured Run separately from receipt authority, which advances only
+from none to unique to multiple. Conflicts accumulate across receipts and files.
+Discovery and commit use the same eligibility evaluator and receipt-independent
+source inventory; timestamps and filenames cannot exclude conflicting authority.
+
+Capture fingerprints every inspected byte, including post-closure suffixes,
+then checks the file identities, receipt digests and directory inventory. Changes
+detected during capture block import and require rediscovery; there are no automatic
+retries. Verification rereads count against the same 128 MB operation budget.
+Unparseable or unread bytes cannot establish uniqueness. Fully inspected independent
+later activity remains legal and never extends the measured Run.
+
+A complete sealed commit-time observation is the approved external authority
+cutoff (Issue #27). Later producer writes do not retroactively invalidate the
+ordinary revision-checked ProductionStore mutation. This bounded observation set
+is not an atomic live-filesystem snapshot, and it does not promise coordination
+with Codex writers through physical canonical publication. Raw bytes are transient;
+only normalized Run evidence crosses the bridge or enters canonical storage.
