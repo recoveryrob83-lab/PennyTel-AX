@@ -20,7 +20,7 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - Accepted Slice 9 storage-service/SQLite context map: [`docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md`](docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md)
 - Accepted Slice 10 canonical-artifact/publish-recovery context map: [`docs/context-maps/Slice_10_Canonical_JSON_Artifact_Store_Publish_Recovery_Context_Map.md`](docs/context-maps/Slice_10_Canonical_JSON_Artifact_Store_Publish_Recovery_Context_Map.md)
 - Accepted Slice 11 legacy-migration/canonical-production-cutover context map: [`docs/context-maps/Slice_11_Legacy_Dataset_Migration_Canonical_Production_Cutover_Context_Map.md`](docs/context-maps/Slice_11_Legacy_Dataset_Migration_Canonical_Production_Cutover_Context_Map.md)
-- Active Slice 12 Reporter integration/adoption context map: [`docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md`](docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md)
+- Active Slice 12 pennyReporter integration/adoption context map: [`docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md`](docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
 - Canonical registry input: [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json)
 - Runtime/verification record: [`docs/verification.md`](docs/verification.md) and [`docs/bounded-repair-verification.md`](docs/bounded-repair-verification.md)
