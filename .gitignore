@@ -19,6 +19,9 @@ test-results/
 .env.*
 !.env.example
 
+# PennyOS local runtime evidence (tracked identity remains under pennyos/)
+.pennyos/runtime/
+
 # Local caches / logs
 .eslintcache
 *.log*
