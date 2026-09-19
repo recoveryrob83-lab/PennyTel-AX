@@ -11,6 +11,16 @@ export const MAX_PROJECTION_RECORDS = 50_000
 
 const APPLICATION_ID = 0x50544c31 // "PTL1"
 const BUSY_TIMEOUT_MS = 500
+const IDENTITY_COLUMNS = new Set(['id', 'slice_id', 'run_id', 'repair_run_id'])
+
+// SQLite's JS binding converts lone UTF-16 surrogates to the same replacement
+// character. Escape those IDs, and the escape prefix itself, before indexing.
+// Ordinary IDs retain their existing relational representation.
+function projectionIdentity(id: string): string {
+  return id.startsWith('~') || /[\uD800-\uDFFF]/.test(id)
+    ? `~${Buffer.from(id, 'utf16le').toString('hex')}`
+    : id
+}
 
 const REDUNDANT_FIELDS: Record<
   (typeof TABLES)[number],
@@ -341,13 +351,13 @@ export class SqliteProjectionRepository implements DatasetProjectionRepository {
         DELETE FROM projection_metadata;
       `)
       normalized.slices.forEach((record, position) =>
-        this.insertSlice.run(position, record.id, json(record))
+        this.insertSlice.run(position, projectionIdentity(record.id), json(record))
       )
       normalized.runs.forEach((record, position) =>
         this.insertRun.run(
           position,
-          record.id,
-          record.sliceId,
+          projectionIdentity(record.id),
+          projectionIdentity(record.sliceId),
           record.model ?? null,
           record.provider ?? null,
           json(record)
@@ -356,26 +366,26 @@ export class SqliteProjectionRepository implements DatasetProjectionRepository {
       normalized.findings.forEach((record, position) =>
         this.insertFinding.run(
           position,
-          record.id,
-          record.sliceId,
-          record.runId ?? null,
-          record.repairRunId ?? null,
+          projectionIdentity(record.id),
+          projectionIdentity(record.sliceId),
+          record.runId === undefined ? null : projectionIdentity(record.runId),
+          record.repairRunId === undefined ? null : projectionIdentity(record.repairRunId),
           json(record)
         )
       )
       normalized.discoveries.forEach((record, position) =>
         this.insertDiscovery.run(
           position,
-          record.id,
-          record.sliceId,
-          record.runId ?? null,
+          projectionIdentity(record.id),
+          projectionIdentity(record.sliceId),
+          record.runId === undefined ? null : projectionIdentity(record.runId),
           json(record)
         )
       )
       normalized.pricing.forEach((record, position) =>
         this.insertPricing.run(
           position,
-          record.id,
+          projectionIdentity(record.id),
           record.model,
           record.provider,
           record.effectiveDate,
@@ -426,7 +436,13 @@ export class SqliteProjectionRepository implements DatasetProjectionRepository {
       throw new Error(`SQLite projection ${table} record is not an object.`)
     const value = record as Record<string, unknown>
     for (const [jsonKey, column] of REDUNDANT_FIELDS[table]) {
-      const canonicalValue = value[jsonKey] === undefined ? null : value[jsonKey]
+      const source = value[jsonKey]
+      const canonicalValue =
+        typeof source === 'string' && IDENTITY_COLUMNS.has(column)
+          ? projectionIdentity(source)
+          : source === undefined
+            ? null
+            : source
       if (canonicalValue !== row[column])
         throw new Error(
           `SQLite projection ${table} relational projection does not match its JSON record.`

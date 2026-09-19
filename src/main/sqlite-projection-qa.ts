@@ -1,9 +1,11 @@
 // Durable adapter smoke entry. It is a separate Electron main entry, never an application hook.
 import assert from 'node:assert/strict'
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import canonicalRegistry from '../../docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json'
 import type { Dataset } from '../shared/types'
+import { CanonicalArtifactStore } from './canonical-artifact-store'
+import { canonicalArtifactStorePath } from './canonical-artifacts'
 import { SqliteProjectionRepository, projectionDatabasePath } from './sqlite-projection'
 import { MainProcessStorageService } from './storage-service'
 
@@ -100,50 +102,94 @@ const databasePath = projectionDatabasePath(directory)
 assert.equal(databasePath.startsWith(`${directory}/`), true)
 assert.equal(databasePath.includes('app.asar'), false)
 
-const repository = new SqliteProjectionRepository(databasePath)
-const settings = repository.connectionSettings
-const service = new MainProcessStorageService(repository)
-const expected = representativeDataset()
-try {
-  if (phase === 'create') service.project(expected)
-  const actual = service.loadProjection()
-  assert.deepEqual(actual, expected)
-  assert.equal(Object.hasOwn(actual!.runs[0], 'outputTokens'), true)
-  assert.equal(actual!.runs[0].outputTokens, 0)
-  assert.equal(Object.hasOwn(actual!.runs[1], 'outputTokens'), false)
-  assert.equal(actual!.runs[0].executionEvidence?.environment?.networkAccess, 'restricted')
-  assert.equal(actual!.registry?.kind, 'pennytel-model-registry')
-  writeFileSync(
-    join(directory, `${phase}-report.json`),
-    JSON.stringify(
-      {
-        phase,
-        versions: process.versions,
-        processType: process.type ?? 'run-as-node',
-        databasePath,
-        settings,
-        revision: actual!.revision,
-        recordCounts: {
-          slices: actual!.slices.length,
-          runs: actual!.runs.length,
-          findings: actual!.findings.length,
-          discoveries: actual!.discoveries.length,
-          pricing: actual!.pricing.length
-        },
-        checks: {
-          roundTrip: true,
-          knownZero: true,
-          unknownOmitted: true,
-          nestedEvidence: true,
-          registry: true,
-          outsideAsar: true
-        }
-      },
-      null,
-      2
+async function runQa(): Promise<void> {
+  const repository = new SqliteProjectionRepository(databasePath)
+  const settings = repository.connectionSettings
+  const service = new MainProcessStorageService(repository)
+  const expected = representativeDataset()
+  try {
+    if (phase === 'create') service.project(expected)
+    const actual = service.loadProjection()
+    assert.deepEqual(actual, expected)
+    assert.equal(Object.hasOwn(actual!.runs[0], 'outputTokens'), true)
+    assert.equal(actual!.runs[0].outputTokens, 0)
+    assert.equal(Object.hasOwn(actual!.runs[1], 'outputTokens'), false)
+    assert.equal(actual!.runs[0].executionEvidence?.environment?.networkAccess, 'restricted')
+    assert.equal(actual!.registry?.kind, 'pennytel-model-registry')
+    const canonicalDirectory = join(directory, 'canonical-qa')
+    if (phase === 'create') mkdirSync(canonicalDirectory, { mode: 0o700 })
+    const artifactRoot = canonicalArtifactStorePath(canonicalDirectory)
+    assert.equal(artifactRoot.includes('app.asar'), false)
+    const artifactService = new MainProcessStorageService(
+      new SqliteProjectionRepository(projectionDatabasePath(canonicalDirectory))
     )
-  )
-} finally {
-  service.close()
+    let interrupted = false
+    const artifacts = new CanonicalArtifactStore(artifactRoot, artifactService, {
+      faultInjector: ({ boundary }) => {
+        if (phase === 'create' && !interrupted && boundary === 'canonical-state-durable') {
+          interrupted = true
+          throw new Error('synthetic Electron publish interruption')
+        }
+      }
+    })
+    try {
+      if (phase === 'create') {
+        await artifacts.initialize(expected).then(
+          () => assert.fail('Synthetic publish interruption did not occur.'),
+          (error: unknown) =>
+            assert.match((error as Error).message, /synthetic Electron publish interruption/)
+        )
+        assert.deepEqual(artifactService.loadProjection(), undefined)
+      } else {
+        assert.equal((await artifacts.recover()).action, 'recovered-publication')
+        assert.equal((await artifacts.recover()).action, 'none')
+        assert.deepEqual(artifactService.loadProjection(), expected)
+      }
+      assert.deepEqual(await artifacts.loadCanonical(), expected)
+    } finally {
+      artifactService.close()
+    }
+    writeFileSync(
+      join(directory, `${phase}-report.json`),
+      JSON.stringify(
+        {
+          phase,
+          versions: process.versions,
+          processType: process.type ?? 'run-as-node',
+          databasePath,
+          artifactRoot,
+          settings,
+          revision: actual!.revision,
+          recordCounts: {
+            slices: actual!.slices.length,
+            runs: actual!.runs.length,
+            findings: actual!.findings.length,
+            discoveries: actual!.discoveries.length,
+            pricing: actual!.pricing.length
+          },
+          checks: {
+            roundTrip: true,
+            knownZero: true,
+            unknownOmitted: true,
+            nestedEvidence: true,
+            registry: true,
+            outsideAsar: true,
+            canonicalArtifactRestartRecovery: true
+          }
+        },
+        null,
+        2
+      )
+    )
+  } finally {
+    service.close()
+  }
 }
-process.exit(0)
+
+runQa().then(
+  () => process.exit(0),
+  (error: unknown) => {
+    console.error(error)
+    process.exit(1)
+  }
+)

@@ -60,6 +60,8 @@ async function runPhase(phase) {
   assert.equal(report.checks.nestedEvidence, true)
   assert.equal(report.checks.registry, true)
   assert.equal(report.checks.outsideAsar, true)
+  assert.equal(report.checks.canonicalArtifactRestartRecovery, true)
+  assert.equal(report.artifactRoot.includes('app.asar'), false)
   assert.equal(report.settings.foreignKeys, true)
   assert.equal(report.settings.journalMode, 'wal')
   assert.equal(report.settings.synchronous, 'normal')
@@ -70,6 +72,7 @@ async function runPhase(phase) {
 const created = await runPhase('create')
 const restarted = await runPhase('restart')
 assert.equal(restarted.databasePath, created.databasePath)
+assert.equal(restarted.artifactRoot, created.artifactRoot)
 assert.deepEqual(restarted.recordCounts, created.recordCounts)
 assert.equal(Boolean(packagedExecutable), entry.includes('app.asar'))
 
@@ -126,5 +129,5 @@ if (packagedExecutable) {
   }
 }
 console.log(
-  `PASS: SQLite projection create/restart in Electron ${created.versions.electron}; Node ${created.versions.node}; SQLite ${created.versions.sqlite}; packaged=${Boolean(packagedExecutable)}${packagedExecutable ? '; packaged application/security=true' : ''}; reports=${directory}`
+  `PASS: SQLite projection and canonical artifact publish/recovery in Electron ${created.versions.electron}; Node ${created.versions.node}; SQLite ${created.versions.sqlite}; packaged=${Boolean(packagedExecutable)}${packagedExecutable ? '; packaged application/security=true' : ''}; reports=${directory}`
 )

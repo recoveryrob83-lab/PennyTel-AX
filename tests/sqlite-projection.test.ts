@@ -91,6 +91,35 @@ describe('main-process SQLite projection foundation', () => {
     restarted.service.close()
   })
 
+  it('indexes distinct lone-surrogate and escape-prefixed IDs without losing relationships', async () => {
+    const directory = await qaDirectory()
+    const path = projectionDatabasePath(directory)
+    const data = fixture()
+    data.slices[0].id = '\ud800'
+    data.runs[0].sliceId = '\ud800'
+    data.slices.push({ id: '\udc00', title: 'Second surrogate' })
+    data.slices.push({ id: '~00d8', title: 'Literal escape prefix' })
+    const first = openService(path)
+    first.service.project(data)
+    expect(first.service.loadProjection()).toEqual(data)
+    first.service.close()
+
+    const raw = new DatabaseSync(path)
+    const ids = raw
+      .prepare('SELECT id FROM slices ORDER BY position')
+      .all()
+      .map((row) => row.id)
+    expect(new Set(ids).size).toBe(3)
+    expect(ids[0]).not.toBe(ids[1])
+    expect(ids[0]).not.toBe(ids[2])
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    raw.close()
+
+    const restarted = openService(path)
+    expect(restarted.service.loadProjection()).toEqual(data)
+    restarted.service.close()
+  })
+
   it('rolls back the complete replacement when a SQLite write fails mid-transaction', async () => {
     const directory = await qaDirectory()
     const path = projectionDatabasePath(directory)
