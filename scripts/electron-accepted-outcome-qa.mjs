@@ -10,6 +10,8 @@ import { verifyAnalytics } from './electron-analytics-qa.mjs'
 await mkdir(resolve('test-results'), { recursive: true })
 const directory = await mkdtemp(resolve('test-results/accepted-outcome-runtime-'))
 const data = JSON.parse(await readFile(resolve('tests/accepted-outcome-fixture.json'), 'utf8'))
+// Metric-row checks exercise attached evidence; the empty slice remains compact.
+for (const run of data.runs) run.executionEvidence = { kind: 'codex-rollout', formatVersion: 1 }
 data.registry = JSON.parse(
   await readFile(
     resolve('docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json'),
@@ -69,7 +71,7 @@ try {
   assert.match(await row('Incomplete accepted lifecycle').innerText(), /no acceptance cutoff/)
   assert.match(
     await row('Accepted with no recorded runs').locator('th, td').nth(1).innerText(),
-    /Unknown.*0\/0 recorded.*incomplete/s
+    /No execution evidence attached/
   )
   assert.match(
     await row('Recorded zero-cost acceptance').locator('th, td').nth(1).innerText(),

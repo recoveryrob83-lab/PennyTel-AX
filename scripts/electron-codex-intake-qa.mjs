@@ -2,6 +2,7 @@ import { _electron as electron } from 'playwright'
 import assert from 'node:assert/strict'
 import { appendFile, copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 const fixtureId = 'pr1_20260919T120000000Z_11111111111111111111111111111111'
 await mkdir(resolve('test-results'), { recursive: true })
@@ -21,6 +22,7 @@ await writeFile(
   join(repo, 'pennyos', 'slices', 'S13.json'),
   JSON.stringify({ sliceId: 'S13', title: 'Synthetic Codex intake QA' })
 )
+execFileSync('git', ['init', '-q', repo])
 await copyFile(
   resolve(`tests/fixtures/codex-receipts/${fixtureId}.json`),
   join(repo, '.pennyos', 'runtime', 'receipts', `${fixtureId}.json`)
@@ -84,6 +86,33 @@ try {
   )
   assert.ok(!bridge.some((name) => /filesystem|readfile|sql|rollout/i.test(name)))
   await page.getByRole('navigation').getByRole('button', { name: 'Data & portability' }).click()
+  for (const path of ['pennyos/project.json', 'pennyos/slices/S13.json']) {
+    const other =
+      path === 'pennyos/project.json' ? 'pennyos/slices/S13.json' : 'pennyos/project.json'
+    execFileSync('git', ['-C', repo, 'add', '-f', '--', other])
+    for (const ignored of [false, true]) {
+      await writeFile(join(repo, '.gitignore'), ignored ? `${path}\n` : '')
+      await page.getByRole('button', { name: 'Discover Codex runs' }).click()
+      await page.getByRole('heading', { name: `${fixtureId} · blocked` }).waitFor()
+      await page
+        .getByText(/both pennyos\/project.json and the Slice identity must be Git-tracked/)
+        .waitFor()
+      assert.equal(await page.getByRole('button', { name: 'Create Slice' }).count(), 0)
+      const blockedData = await page.evaluate(async () => (await window.pennytel.load()).data)
+      assert.equal(blockedData.slices.length, 0)
+      assert.equal(blockedData.runs.length, 0)
+    }
+    execFileSync('git', ['-C', repo, 'rm', '--cached', '--', other])
+  }
+  execFileSync('git', [
+    '-C',
+    repo,
+    'add',
+    '-f',
+    '--',
+    'pennyos/project.json',
+    'pennyos/slices/S13.json'
+  ])
   await page.getByRole('button', { name: 'Discover Codex runs' }).click()
   await page.getByRole('heading', { name: `${fixtureId} · blocked` }).waitFor()
   await page.getByRole('button', { name: 'Create Slice' }).click()
@@ -183,6 +212,17 @@ try {
   const comparison = page.getByRole('region', { name: 'Accepted outcome comparison' })
   await comparison.getByText('Slice ID: S13', { exact: true }).waitFor()
   await comparison.getByText('Slice ID: S13-other', { exact: true }).waitFor()
+  const compactRow = comparison.getByRole('row').filter({ hasText: 'Slice ID: S13-other' })
+  assert.equal(await compactRow.getByRole('cell').count(), 2)
+  assert.equal(await compactRow.getByRole('cell').first().getAttribute('colspan'), '6')
+  assert.match(await compactRow.innerText(), /No execution evidence attached/)
+  assert.equal(await compactRow.getByText(/Repair cost:/).count(), 0)
+  const lifecycle = page
+    .locator('details')
+    .filter({ hasText: 'Inspect lifecycle · Synthetic Codex intake QA · S13-other' })
+  await lifecycle.locator('summary').click()
+  await lifecycle.getByRole('button', { name: 'Implementation', exact: true }).waitFor()
+  await page.screenshot({ path: join(root, 'compare-compaction.png'), fullPage: true })
   await page.getByLabel('Execution evidence coverage').selectOption('None')
   await comparison.getByText('Slice ID: S13-other', { exact: true }).waitFor()
   assert.equal(await comparison.getByText('Slice ID: S13', { exact: true }).count(), 0)
@@ -193,7 +233,7 @@ try {
   await page.getByRole('button', { name: 'Discover Codex runs' }).click()
   await page.getByRole('heading', { name: `${fixtureId} · already imported` }).waitFor()
   console.log(
-    'Electron Codex intake QA passed: explicit parent creation, rediscovery, review, duplicate rejection, safe resume, verification import, acceptance, restart, Compare coverage, idempotency'
+    'Electron Codex intake QA passed: untracked/ignored identity blocked, tracked parent creation, rediscovery, review, duplicate rejection, safe resume, verification import, acceptance, restart, Compare compaction/expansion/coverage, idempotency'
   )
 } finally {
   if (application) await application.close()

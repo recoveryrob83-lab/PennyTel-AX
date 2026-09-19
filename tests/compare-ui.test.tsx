@@ -42,6 +42,33 @@ describe('comparison UI uses shared cohort context', () => {
       'Complete'
     )
     expect(executionEvidenceCoverage([])).toBe('None')
+    for (const id of ['empty', 'incomplete']) {
+      const row = region.getByText(`Slice ID: ${id}`).closest('tr')!
+      const cells = within(row).getAllByRole('cell')
+      expect(cells).toHaveLength(2)
+      expect(cells[0]).toHaveAttribute('colspan', '6')
+      expect(cells[0]).toHaveTextContent('No execution evidence attached.')
+      expect(cells[0].textContent?.match(/Unknown/g)).toHaveLength(1)
+      expect(cells[1]).toHaveTextContent(`None0/${id === 'empty' ? 0 : 1} relevant runs attached`)
+      expect(within(row).queryByText(/Repair cost:/)).toBeNull()
+    }
+    for (const [id, coverage, cost] of [
+      ['mixed', 'Partial', '$2.5248'],
+      ['one-shot', 'Complete', '$2.418']
+    ]) {
+      const row = region.getByText(`Slice ID: ${id}`).closest('tr')!
+      expect(within(row).getAllByRole('cell')).toHaveLength(7)
+      expect(row).toHaveTextContent(coverage)
+      expect(row).toHaveTextContent(cost)
+      expect(within(row).queryByText('No execution evidence attached.')).toBeNull()
+    }
+    const summary = screen.getByText(/Inspect lifecycle · Incomplete accepted lifecycle/)
+    await userEvent.click(summary)
+    expect(
+      within(summary.closest('details')!).getByRole('table', {
+        name: 'Lifecycle totals · Incomplete accepted lifecycle'
+      })
+    ).toBeVisible()
     await userEvent.selectOptions(screen.getByLabelText('Execution evidence coverage'), 'None')
     expect(region.queryByText('Slice ID: mixed')).toBeNull()
     expect(region.getByText('Slice ID: empty')).toBeVisible()
@@ -52,6 +79,7 @@ describe('comparison UI uses shared cohort context', () => {
   it('shows outcome samples, cross-model lifecycle stages, token coverage and opens downstream source runs', async () => {
     const data: unknown = structuredClone(acceptedFixture)
     validateDataset(data)
+    data.runs[0].executionEvidence = { kind: 'codex-rollout', formatVersion: 1 }
     const user = userEvent.setup()
     const onOpenRun = vi.fn()
     render(<Compare data={data} onOpenRun={onOpenRun} onOpenSlice={vi.fn()} />)
@@ -90,6 +118,7 @@ describe('comparison UI uses shared cohort context', () => {
   it('visibly distinguishes Yes, No, Unknown, missing runtime telemetry and known zero outcomes', () => {
     const data: unknown = structuredClone(acceptedFixture)
     validateDataset(data)
+    for (const run of data.runs) run.executionEvidence = { kind: 'codex-rollout', formatVersion: 1 }
     render(<Compare data={data} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
     const table = within(screen.getByRole('region', { name: 'Accepted outcome comparison' }))
     const cells = (name: string): HTMLElement[] =>
@@ -102,7 +131,7 @@ describe('comparison UI uses shared cohort context', () => {
     )
     expect(cells('Incomplete accepted lifecycle')[5]).toHaveTextContent('Total repairs: Unknown')
     expect(cells('Accepted with no recorded runs')[1]).toHaveTextContent(
-      'Unknown0/0 recorded · incomplete'
+      'No execution evidence attached.'
     )
     expect(cells('Recorded zero-cost acceptance')[1]).toHaveTextContent('$0.001/1 recorded')
     expect(screen.getByText(/Showing 5 of 5 accepted outcomes/)).toBeVisible()
@@ -351,7 +380,9 @@ describe('comparison UI uses shared cohort context', () => {
       importCodexRun: vi.fn(),
       createCodexSlice: vi.fn()
     }
-    render(<Compare data={comparisonFixture()} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
+    const data = comparisonFixture()
+    data.runs[0].executionEvidence = { kind: 'codex-rollout', formatVersion: 1 }
+    render(<Compare data={data} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
     const accepted = within(
       screen.getByRole('heading', { name: 'Accepted slice economics' }).closest('section')!
     )

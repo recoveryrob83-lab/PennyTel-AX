@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'node:fs/promises'
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { appendFileSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import {
   mkdtemp,
@@ -708,6 +709,8 @@ async function authorityHarness(
     join(dir, 'pennyos', 'slices', 'S13.json'),
     JSON.stringify({ sliceId: 'S13', title: 'Tracked title' })
   )
+  execFileSync('git', ['init', '-q', dir])
+  execFileSync('git', ['-C', dir, 'add', '--', 'pennyos/project.json', 'pennyos/slices/S13.json'])
   await writeFile(join(receiptDirectory, `${receiptId}.json`), receipt(receiptId).text)
   const home = join(dir, 'codex')
   await mkdir(join(home, 'sessions'), { recursive: true })
@@ -778,6 +781,47 @@ async function authorityHarness(
 afterEach(() => vi.restoreAllMocks())
 
 describe('S13 sealed authority observation regression matrix', () => {
+  it.each([
+    ['pennyos/project.json', false],
+    ['pennyos/project.json', true],
+    ['pennyos/slices/S13.json', false],
+    ['pennyos/slices/S13.json', true]
+  ] as const)(
+    'blocks creation from untracked identity %s (ignored: %s), including stale previews',
+    async (path, ignored) => {
+      await inTemp(async (dir) => {
+        const h = await authorityHarness(dir, { missingSlice: true })
+        const preview = await h.discover()
+        expect(preview.createSlice).toBeDefined()
+        // Only the disposable fixture's index changes; the lookalike file stays present.
+        execFileSync('git', ['-C', dir, 'rm', '--cached', '--', path])
+        if (ignored) await writeFile(join(dir, '.gitignore'), `${path}\n`)
+        expect(execFileSync('git', ['-C', dir, 'ls-files', '--', path], { encoding: 'utf8' })).toBe(
+          ''
+        )
+        await expect(h.intake.createSlice(preview.createSlice!.token)).rejects.toThrow(
+          'identity changed'
+        )
+        const blocked = await h.discover()
+        expect(blocked.status).toBe('blocked')
+        expect(blocked.reason).toContain('must be Git-tracked')
+        expect(blocked.reason).toContain('manually')
+        expect(blocked.createSlice).toBeUndefined()
+        expect(blocked.token).toBeUndefined()
+        expect(h.writes).toEqual([])
+      })
+    }
+  )
+  it('fails closed when the identity directory is not a Git repository', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir, { missingSlice: true })
+      await rename(join(dir, '.git'), join(dir, 'saved-git'))
+      const blocked = await h.discover()
+      expect(blocked.reason).toContain('Tracking could not be verified')
+      expect(blocked.createSlice).toBeUndefined()
+      expect(h.writes).toEqual([])
+    })
+  })
   it('offers only tracked Slice semantics, creates once, then requires rediscovery before Run import', async () => {
     await inTemp(async (dir) => {
       const h = await authorityHarness(dir, { missingSlice: true })

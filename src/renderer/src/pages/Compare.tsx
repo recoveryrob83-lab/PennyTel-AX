@@ -820,6 +820,7 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
               <tbody>
                 {displayedAccepted.map((economics) => {
                   const { slice: s, metrics, outcome } = economics
+                  const coverage = executionEvidenceCoverage(economics.lifecycle)
                   return (
                     <tr key={s.id}>
                       <th scope="row">
@@ -835,60 +836,74 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
                         <small>Quality: {qualityLabel(s.qualityGrade)}</small>
                         <small>Preferred: {s.preferredCandidate ?? 'No preference'}</small>
                       </th>
-                      <td>{measurement(metrics.costUSD, money)}</td>
-                      <td>
-                        {measurement(metrics.wallMinutes, duration)}
-                        <small>Sum of recorded run time</small>
-                      </td>
-                      <td>
-                        {duration(economics.elapsedMinutes)}
-                        <small>
-                          {s.timeToAcceptedMinutes !== undefined
-                            ? 'Operator measured'
-                            : economics.elapsedMinutes !== null
-                              ? 'First recorded start to acceptance'
-                              : 'Unknown elapsed time'}
-                        </small>
-                        <small>
-                          {outcome.acceptanceWindow.completeTiming
-                            ? 'Recorded timing complete'
-                            : 'Timing incomplete'}
-                          {!s.acceptedAt ? ' · no acceptance cutoff' : ''}
-                        </small>
-                        {s.acceptedAt && (
+                      {coverage === 'None' ? (
+                        <td colSpan={6}>
+                          No execution evidence attached.
                           <small>
-                            <time dateTime={s.acceptedAt}>{displayTimestamp(s.acceptedAt)}</time>
+                            Inspect lifecycle below for recorded run fields; missing values remain
+                            Unknown.
                           </small>
-                        )}
-                      </td>
+                        </td>
+                      ) : (
+                        <>
+                          <td>{measurement(metrics.costUSD, money)}</td>
+                          <td>
+                            {measurement(metrics.wallMinutes, duration)}
+                            <small>Sum of recorded run time</small>
+                          </td>
+                          <td>
+                            {duration(economics.elapsedMinutes)}
+                            <small>
+                              {s.timeToAcceptedMinutes !== undefined
+                                ? 'Operator measured'
+                                : economics.elapsedMinutes !== null
+                                  ? 'First recorded start to acceptance'
+                                  : 'Unknown elapsed time'}
+                            </small>
+                            <small>
+                              {outcome.acceptanceWindow.completeTiming
+                                ? 'Recorded timing complete'
+                                : 'Timing incomplete'}
+                              {!s.acceptedAt ? ' · no acceptance cutoff' : ''}
+                            </small>
+                            {s.acceptedAt && (
+                              <small>
+                                <time dateTime={s.acceptedAt}>
+                                  {displayTimestamp(s.acceptedAt)}
+                                </time>
+                              </small>
+                            )}
+                          </td>
+                          <td>
+                            {outcome.firstPassAcceptance.state}
+                            <small>
+                              {outcome.firstPassAcceptance.state === 'Yes'
+                                ? 'Implementation accepted directly'
+                                : outcome.firstPassAcceptance.state === 'No'
+                                  ? 'Repair recorded or required'
+                                  : 'Insufficient acceptance evidence'}
+                            </small>
+                          </td>
+                          <td>
+                            {outcome.repair.recordedRunCount} recorded repair runs
+                            <small>Repair cost: {measurement(outcome.repair.costUSD, money)}</small>
+                            <small>
+                              Repair / implementation:{' '}
+                              {percent(outcome.repair.toImplementationCostRatio)}
+                            </small>
+                            {!outcome.repair.recordedRunCount &&
+                              outcome.firstPassAcceptance.state !== 'Yes' && (
+                                <small>Total repairs: Unknown</small>
+                              )}
+                          </td>
+                          <td>
+                            {counts(metrics.evidence.runtimeTested)}
+                            <small>Recorded runtime tested; no separate QA verdict</small>
+                          </td>
+                        </>
+                      )}
                       <td>
-                        {outcome.firstPassAcceptance.state}
-                        <small>
-                          {outcome.firstPassAcceptance.state === 'Yes'
-                            ? 'Implementation accepted directly'
-                            : outcome.firstPassAcceptance.state === 'No'
-                              ? 'Repair recorded or required'
-                              : 'Insufficient acceptance evidence'}
-                        </small>
-                      </td>
-                      <td>
-                        {outcome.repair.recordedRunCount} recorded repair runs
-                        <small>Repair cost: {measurement(outcome.repair.costUSD, money)}</small>
-                        <small>
-                          Repair / implementation:{' '}
-                          {percent(outcome.repair.toImplementationCostRatio)}
-                        </small>
-                        {!outcome.repair.recordedRunCount &&
-                          outcome.firstPassAcceptance.state !== 'Yes' && (
-                            <small>Total repairs: Unknown</small>
-                          )}
-                      </td>
-                      <td>
-                        {counts(metrics.evidence.runtimeTested)}
-                        <small>Recorded runtime tested; no separate QA verdict</small>
-                      </td>
-                      <td>
-                        {executionEvidenceCoverage(economics.lifecycle)}
+                        {coverage}
                         <small>
                           {
                             economics.lifecycle.filter((run) => run.executionEvidence !== undefined)

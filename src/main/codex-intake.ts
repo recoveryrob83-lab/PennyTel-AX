@@ -5,6 +5,8 @@ import { realpathSync, existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import type { CodexExecutionEvidence } from '../shared/execution-evidence'
 import type { CodexIntakeCandidate, Dataset, Run, Slice } from '../shared/types'
 import { validateRecord } from '../shared/data'
@@ -19,6 +21,35 @@ const MAX_LINE_BYTES = 256_000
 const MAX_RECEIPT_BYTES = 4096
 const REPORTER_START = 'PENNYOS_TURN_REPORT_V1'
 const RECEIPT_NAME = /^pr1_[0-9]{8}T[0-9]{9}Z_[a-f0-9]{32}\.json$/
+const execFileAsync = promisify(execFile)
+
+/** Creation authority is limited to these exact index entries in this repository. */
+async function trackedSliceIdentity(root: string, sliceId: string): Promise<boolean> {
+  const paths = ['pennyos/project.json', `pennyos/slices/${sliceId}.json`]
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        '-C',
+        root,
+        '--literal-pathspecs',
+        'ls-files',
+        '--cached',
+        '--full-name',
+        '-z',
+        '--error-unmatch',
+        '--',
+        ...paths
+      ],
+      { timeout: 5000, maxBuffer: 4096 }
+    )
+    // Full names also reject a nested directory accidentally borrowing a parent repo's index.
+    return JSON.stringify(stdout.split('\0').filter(Boolean).sort()) === JSON.stringify(paths)
+  } catch {
+    // Missing Git/index/entries must never grant creation authority or leak process diagnostics.
+    return false
+  }
+}
 
 interface Report {
   receiptId: string
@@ -43,6 +74,7 @@ export interface Receipt {
   report: Report
   digest: string
   sliceProposal?: Pick<Slice, 'id' | 'title' | 'project'>
+  sliceProposalReason?: string
 }
 interface Usage {
   input_tokens: number
@@ -911,7 +943,11 @@ export class CodexIntake {
         if (!object(tracked) || tracked.sliceId !== report.sliceId)
           throw new Error('Receipt slice identity is absent from this repository.')
         let sliceProposal: Receipt['sliceProposal']
-        if (typeof tracked.title === 'string' && typeof project.project === 'string') {
+        const isTracked = await trackedSliceIdentity(root, report.sliceId)
+        const sliceProposalReason = isTracked
+          ? 'Repository Slice identity needs an explicit valid title; create or edit the Slice manually.'
+          : 'Slice creation blocked: both pennyos/project.json and the Slice identity must be Git-tracked in this repository. Tracking could not be verified; create or edit the Slice manually.'
+        if (isTracked && typeof tracked.title === 'string' && typeof project.project === 'string') {
           const proposed = { id: report.sliceId, title: tracked.title, project: project.project }
           try {
             validateRecord('slices', proposed)
@@ -925,7 +961,8 @@ export class CodexIntake {
           text,
           report,
           digest: createHash('sha256').update(text).digest('hex'),
-          sliceProposal
+          sliceProposal,
+          ...(sliceProposal ? {} : { sliceProposalReason })
         })
       } catch (error) {
         rejected.push({
@@ -1058,7 +1095,10 @@ export class CodexIntake {
           return {
             ...base,
             status: decision.status,
-            reason: decision.reason,
+            reason:
+              missingParent && !receipt.sliceProposal
+                ? `${decision.reason} ${receipt.sliceProposalReason}`
+                : decision.reason,
             ...(createToken
               ? { createSlice: { token: createToken, slice: receipt.sliceProposal! } }
               : {}),
