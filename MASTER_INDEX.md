@@ -1,7 +1,7 @@
 # PennyTel repository map
 
 Evidence-based map of the repository at accepted PennyTel `0.2.2` repository
-candidate `affac3608345ce3ac4c31f28450f0552bd1afed0`. This
+candidate `908f67bc8b055ef94f7874339a3551f5742ebdaf`. This
 is a navigation aid for future slices, not a replacement for the assigned
 GitHub Issue or the authoritative contracts in `docs/`.
 
@@ -21,7 +21,8 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - Accepted Slice 10 canonical-artifact/publish-recovery context map: [`docs/context-maps/Slice_10_Canonical_JSON_Artifact_Store_Publish_Recovery_Context_Map.md`](docs/context-maps/Slice_10_Canonical_JSON_Artifact_Store_Publish_Recovery_Context_Map.md)
 - Accepted Slice 11 legacy-migration/canonical-production-cutover context map: [`docs/context-maps/Slice_11_Legacy_Dataset_Migration_Canonical_Production_Cutover_Context_Map.md`](docs/context-maps/Slice_11_Legacy_Dataset_Migration_Canonical_Production_Cutover_Context_Map.md)
 - Accepted Slice 12 pennyReporter integration/adoption context map: [`docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md`](docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md)
-- Active Slice 13 Codex receipt-discovery/reviewed-import context map: [`docs/context-maps/Slice_13_Codex_Receipt_Discovery_Reviewed_Run_Import_Context_Map.md`](docs/context-maps/Slice_13_Codex_Receipt_Discovery_Reviewed_Run_Import_Context_Map.md)
+- Accepted Slice 13 Codex receipt-discovery/reviewed-import context map: [`docs/context-maps/Slice_13_Codex_Receipt_Discovery_Reviewed_Run_Import_Context_Map.md`](docs/context-maps/Slice_13_Codex_Receipt_Discovery_Reviewed_Run_Import_Context_Map.md)
+- S13 architecture escalation report: [`pennyos/worker-reports/S13/S13_Architecture_Escalation_01.md`](pennyos/worker-reports/S13/S13_Architecture_Escalation_01.md)
 - pennyReporter consumer contract and S13 handoff: [`docs/pennyreporter-integration.md`](docs/pennyreporter-integration.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
 - Canonical registry input: [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json)
@@ -38,7 +39,7 @@ map and use this master index when broader repository geography is needed.
 - Canonical project/slice identity remains tracked in `pennyos/project.json` and `pennyos/slices/<sliceId>.json`. pennyReporter derives identity from those files rather than accepting caller overrides.
 - Worker-close receipts are local workflow evidence under `.pennyos/runtime/receipts/`. `.gitignore` ignores `.pennyos/runtime/` while leaving tracked `pennyos/` identity visible to Git.
 - The canonical worker-close protocol is `PENNYOS_TURN_REPORT_V1`. Workers invoke pennyReporter and copy its generated block verbatim as the terminal block of their final response; hand-authored receipt IDs or blocks are non-authoritative.
-- Reporter receipts do not mutate or become PennyTel canonical telemetry. S13 owns pairing the final terminal report and matching local receipt with independently sourced Codex session/turn evidence before any telemetry import.
+- Reporter receipts do not directly become PennyTel telemetry. Accepted S13 pairs a validated receipt and exact final terminal report with independently sourced Codex rollout evidence, presents a sanitized operator review, and only then publishes the approved Run through ordinary PennyTel mutation.
 - Consumer-side receipt validation/matching uses pennyReporter's public `validateReceipt` and `matchTerminalBlockToReceipt` seam; PennyTel should not reimplement the protocol.
 
 ## Runtime ownership and boundaries
@@ -56,9 +57,10 @@ map and use this master index when broader repository geography is needed.
 - The main process registers the only application IPC handlers:
   `telemetry:open-batch`, `telemetry:commit-batch`, `telemetry:load`,
   `telemetry:mutate`, `telemetry:preview`, `telemetry:open`, `telemetry:export`,
-  `telemetry:export-comparison`, and `telemetry:run-comparison-plan`. Each handler checks that the caller is the
+  `telemetry:export-comparison`, `telemetry:run-comparison-plan`, and the narrow Codex-intake discover/commit channels. Each handler checks that the caller is the
   primary window's main frame before acting.
 - [`src/main/batch-import.ts`](src/main/batch-import.ts) owns bounded recursive discovery of `.pennytel.json` batch artifacts in an operator-selected folder, including containment/stability checks and file/count/depth/byte limits. It does not own persistence.
+- [`src/main/codex-intake.ts`](src/main/codex-intake.ts) owns S13's operator-triggered Codex receipt/rollout intake boundary. It validates project-local pennyReporter receipts through the installed Reporter protocol, enumerates only fixed active/archive Codex roots, performs bounded streaming rollout capture, reduces receipt authority monotonically (`none -> unique -> multiple`), freezes the first valid closure's measured Run, seals a bounded commit-time authority observation, and shares one eligibility evaluator between discovery and commit. Raw rollout content remains main-process-only and transient.
 - [`src/main/production-store.ts`](src/main/production-store.ts) is the normal
   PennyTel production storage facade. It admits startup authority deterministically,
   migrates a valid legacy live Dataset once into canonical JSON artifacts, preserves
@@ -141,8 +143,8 @@ map and use this master index when broader repository geography is needed.
 
 - [`src/preload/index.ts`](src/preload/index.ts) exposes exactly one typed
   `window.pennytel` API through `contextBridge`: open/commit batch import, load,
-  mutate, preview/open single import, export dataset, export comparison, and run
-  comparison plan.
+  mutate, preview/open single import, export dataset, export comparison, run
+  comparison plan, and sanitized Codex-intake discover/commit operations.
 - [`src/preload/index.d.ts`](src/preload/index.d.ts) supplies the renderer's
   global `Window.pennytel` type. There is no generic IPC or filesystem API in
   the renderer.
@@ -151,6 +153,7 @@ map and use this master index when broader repository geography is needed.
 
 - [`src/renderer/src/main.tsx`](src/renderer/src/main.tsx) mounts React in
   `StrictMode` and imports the application stylesheet.
+- [`src/renderer/src/pages/Data.tsx`](src/renderer/src/pages/Data.tsx) now includes the S13 Codex-intake review surface. It can trigger main-process discovery, display only sanitized receipt/Run/evidence coverage and blocked reasons, and explicitly commit an eligible preview token; it never receives raw Codex rollout contents or generic filesystem authority.
 - [`src/renderer/src/App.tsx`](src/renderer/src/App.tsx) loads the main-owned
   snapshot, holds page/selection/modal state, routes mutations with the
   loaded dataset revision, and coordinates the page components and shared
@@ -706,6 +709,7 @@ scripts exercise the real main/preload/renderer/filesystem path.
   detail, evidence distributions/coverage, exact and missing filters/groups,
   ordinary comparison export, comparison-plan result parity, canonical/archive
   stability, narrow-window layout, and Electron security invariants.
+- [`scripts/electron-codex-intake-qa.mjs`](scripts/electron-codex-intake-qa.mjs) exercises S13 with an isolated PennyTel profile and synthetic Codex home: discover/review, duplicate-authority rejection without publication, safe resumed activity, explicit import, restart, and idempotency. [`tests/codex-intake.test.ts`](tests/codex-intake.test.ts) carries the deterministic current-Codex fixture, bounded parsing/privacy cases, token-boundary derivation, monotonic conflict accumulation, source/inventory capture interleavings, and discovery/commit eligibility equivalence.
 - [`scripts/electron-batch-import-qa.mjs`](scripts/electron-batch-import-qa.mjs) uses an isolated profile and the real Electron path to prove nested artifact discovery, mixed v1/v2 batch preview, one canonical revision publication without legacy live/backup writes, duplicate skips, failed-commit preservation/token invalidation, late malformed rejection, restart persistence, and the unchanged renderer security boundary.
 - `electron-analytics-qa.mjs` remains the general legacy analytics runtime
   helper. Against its isolated profile it verifies descriptive distributions and coverage,
@@ -734,6 +738,7 @@ scripts exercise the real main/preload/renderer/filesystem path.
 
 ### Invariants future workers must preserve
 
+- S13 Codex intake uses sealed commit-time observation semantics: every claimed inspected byte horizon is classified within one bounded observation; authority conflicts accumulate monotonically; discovery and commit apply the same eligibility rules; changes during capture block/retry the observation; and writes occurring after a complete approved observation cutoff do not retroactively invalidate publication. The observation is explicitly not an atomic cross-file filesystem snapshot.
 - `pennyos/` is tracked factory identity; `.pennyos/runtime/` is ignored local workflow evidence. pennyReporter receipts and `PENNYOS_TURN_REPORT_V1` closure signals are not PennyTel Dataset authority and must not be silently promoted into telemetry without the explicit ingestion/review path.
 - The main process owns authoritative dataset persistence through
   `ProductionStore`; canonical JSON artifacts are normal production authority,
@@ -883,6 +888,8 @@ scripts exercise the real main/preload/renderer/filesystem path.
   non-goals in [`README.md`](README.md).
 
 ## Known uncertainties and verification limits
+
+- S13 deterministic fixtures and Electron QA cover the observed Codex CLI 0.155.1 rollout shape. Unknown future authority/turn/token variants fail closed or remain Unknown rather than being interpreted optimistically. Packaged Linux Codex-intake equivalence remains unverified because the attempted package build failed in Electron Builder dependency collection before a usable package existed; this is retained as a verification/environment limitation, not an accepted S13 product defect.
 
 - The repository documents and verifies local Linux Electron workflows; packaged
   installers and non-Linux runtime environments are configured but not verified
