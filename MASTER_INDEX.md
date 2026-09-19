@@ -1,7 +1,7 @@
 # PennyTel repository map
 
 Evidence-based map of the repository at accepted PennyTel `0.2.2` product
-candidate `34e2b539eb2cb0d745506ada81bc9ae5f6b3b874`. This
+candidate `02676c620c2ae140b5ae3e9c4b1a8ca0559a4d4c`. This
 is a navigation aid for future slices, not a replacement for the assigned
 GitHub Issue or the authoritative contracts in `docs/`.
 
@@ -19,7 +19,7 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - Accepted Slice 8 batch-import context map: [`docs/context-maps/Slice_8_Batch_Telemetry_Import_Context_Map.md`](docs/context-maps/Slice_8_Batch_Telemetry_Import_Context_Map.md)
 - Accepted Slice 9 storage-service/SQLite context map: [`docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md`](docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md)
 - Accepted Slice 10 canonical-artifact/publish-recovery context map: [`docs/context-maps/Slice_10_Canonical_JSON_Artifact_Store_Publish_Recovery_Context_Map.md`](docs/context-maps/Slice_10_Canonical_JSON_Artifact_Store_Publish_Recovery_Context_Map.md)
-- Active Slice 11 legacy-migration/canonical-production-cutover context map: [`docs/context-maps/Slice_11_Legacy_Dataset_Migration_Canonical_Production_Cutover_Context_Map.md`](docs/context-maps/Slice_11_Legacy_Dataset_Migration_Canonical_Production_Cutover_Context_Map.md)
+- Accepted Slice 11 legacy-migration/canonical-production-cutover context map: [`docs/context-maps/Slice_11_Legacy_Dataset_Migration_Canonical_Production_Cutover_Context_Map.md`](docs/context-maps/Slice_11_Legacy_Dataset_Migration_Canonical_Production_Cutover_Context_Map.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
 - Canonical registry input: [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json)
 - Runtime/verification record: [`docs/verification.md`](docs/verification.md) and [`docs/bounded-repair-verification.md`](docs/bounded-repair-verification.md)
@@ -47,21 +47,48 @@ map and use this master index when broader repository geography is needed.
   `telemetry:export-comparison`, and `telemetry:run-comparison-plan`. Each handler checks that the caller is the
   primary window's main frame before acting.
 - [`src/main/batch-import.ts`](src/main/batch-import.ts) owns bounded recursive discovery of `.pennytel.json` batch artifacts in an operator-selected folder, including containment/stability checks and file/count/depth/byte limits. It does not own persistence.
-- [`src/main/store.ts`](src/main/store.ts) is the authoritative in-memory and
-  on-disk dataset owner. Registry seeding, validation, mutation serialization,
-  revision checks, recovery guards, and backfill all pass through
-  `TelemetryStore`.
+- [`src/main/production-store.ts`](src/main/production-store.ts) is the normal
+  PennyTel production storage facade. It admits startup authority deterministically,
+  migrates a valid legacy live Dataset once into canonical JSON artifacts, preserves
+  exact legacy live and backup bytes in archive evidence, and records restart-safe
+  migration state. After canonical publication is verified, legacy files are archive
+  or recovery evidence only and receive no application writes. `load()`, registry
+  initialization, preview, mutation, batch import, raw export, comparison reads, and
+  comparison-plan reads all use canonical artifacts through this facade.
+- [`src/main/store.ts`](src/main/store.ts) remains the bounded legacy
+  `TelemetryStore` reader/compatibility implementation. Its `telemetry.json` and
+  `telemetry.backup.json` paths are migration input or preserved evidence; normal
+  production composition no longer routes writes through this store.
+- [`src/main/storage-files.ts`](src/main/storage-files.ts) owns the fixed production
+  storage and migration filesystem geography. `StorageFiles` pins absolute directory
+  identity, rejects ancestor or entry links, bounds direct-child names, preserves
+  exact evidence bytes, and provides checked atomic moves and durable directory/file
+  synchronization for legacy archives, migration receipts, and projection recovery;
+  `ProductionStore` uses the same admission surface to distinguish a genuinely new
+  profile from unresolved legacy or rejected-projection evidence.
+- [`src/main/production-projection.ts`](src/main/production-projection.ts) adapts the
+  SQLite repository for normal production. It opens or rebuilds projection state only
+  after canonical authority admission and canonical-driven reconciliation, quarantines
+  safely replaceable invalid databases and SQLite sidecars as recovery evidence, and
+  fails closed for unsafe identities. Projection contents never establish authority
+  or initialize a new profile.
+- [`src/main/index.ts`](src/main/index.ts) composes one `ProductionStore` for the
+  Electron app. Existing IPC, preload, and renderer channel semantics remain in
+  place while normal load, preview, mutation, import, export, and comparison paths
+  use the canonical production facade.
 - [`src/main/storage-service.ts`](src/main/storage-service.ts) defines the
   main-process `PennyTelStorageService` and replaceable
   `DatasetProjectionRepository` boundary. `MainProcessStorageService` validates
   and detaches Dataset values before delegating to an adapter; driver details
-  stay below this service/repository seam. S9 does not wire this projection
-  service into normal production load or mutation.
+  stay below this service/repository seam. `ProductionStore` uses this service
+  only for the rebuildable downstream projection after canonical admission.
 - [`src/main/sqlite-projection.ts`](src/main/sqlite-projection.ts) implements
   the `node:sqlite` `SqliteProjectionRepository` behind that seam. It is a
-  rebuildable SQLite projection, not canonical persistence: `TelemetryStore`
-  and `telemetry.json` remain the sole normal production authority, and normal
-  startup/load/mutate do not use SQLite. The adapter admits only its
+  rebuildable SQLite projection, not canonical persistence: canonical JSON
+  artifacts remain the normal production authority, and normal startup/load/
+  mutate use SQLite only as a downstream projection. `TelemetryStore` and
+  `telemetry.json` remain bounded legacy migration/compatibility surfaces. The
+  adapter admits only its
   deterministic application identity/schema version and exact expected schema;
   it refuses forged foreign identities, unsupported/future versions, ambiguous
   unversioned files, and structural mismatches. Its STRICT five-table schema
@@ -76,14 +103,13 @@ map and use this master index when broader repository geography is needed.
   of the stable ID, preserving distinct valid IDs including lone surrogates and
   escape-prefixed IDs.
 - [`src/main/canonical-artifact-store.ts`](src/main/canonical-artifact-store.ts)
-  is the isolated S10 main-process canonical JSON store and publish coordinator.
-  It sits above `PennyTelStorageService`: canonical artifacts are authoritative
-  within this subsystem and SQLite is a rebuildable downstream projection. The
-  store uses durable pending receipts with `prepared`, `publishing`, and
-  `published` states, direct-child staging/tombstone/receipt files under a
-  flattened store root, metadata-last publication, and bounded idempotent
-  recovery. Normal PennyTel startup/load/mutate remains on `TelemetryStore` /
-  `telemetry.json`; S11 owns migration, reconciliation, and production cutover.
+  is the main-process canonical JSON store and publish coordinator. It sits above
+  `PennyTelStorageService`: canonical artifacts are normal production authority and
+  SQLite is a rebuildable downstream projection. Its S11 `inspectStartup()` performs
+  read-only canonical layout, receipt, and source consistency admission before
+  mutating S10 `recover()` is allowed to clean work, finish publication, or reconcile
+  the projection. S10 durable pending receipts, metadata-last publication, staged
+  artifacts/tombstones, and idempotent recovery remain the publication authority.
 - The projection adapter owns bounded synchronous replacement/load transactions
   and rollback, preserves Dataset revision, nested evidence, registry state,
   optional-field Unknown semantics, and historical snapshots, and reconciles
@@ -94,8 +120,10 @@ map and use this master index when broader repository geography is needed.
   an absolute service-owned path, so projection databases remain main-process
   only and outside ASAR/application resources.
 - [`src/main/export.ts`](src/main/export.ts) is the main-process file-writing
-  boundary for both raw dataset and derived comparison exports. It protects
-  live/backup paths and uses an atomic destination replacement.
+  boundary for both raw dataset and derived comparison exports. It protects the
+  canonical artifact root, projection database and sidecars, migration receipts and
+  legacy archive/evidence paths as a live storage surface, then uses an atomic
+  destination replacement.
 
 ### Preload bridge
 
@@ -117,7 +145,8 @@ map and use this master index when broader repository geography is needed.
   editors/details. Startup errors remain a non-writable error state; there is
   no browser-storage fallback. It imports the canonical package version and
   displays it in the sidebar/header so UI version routing stays aligned with
-  the main-process comparison export metadata.
+  the main-process comparison export metadata. Delete notices report that the
+  canonical save completed and make no legacy backup claim.
 - Renderer code receives a `Dataset` snapshot and asks the preload API for
   mutations. It does not become authoritative for persistence or pricing
   snapshots.
@@ -173,44 +202,68 @@ map and use this master index when broader repository geography is needed.
 
 ## Persistence, recovery, import, and export
 
+### `ProductionStore` and S11 migration
+
+- `ProductionStore.start()` admits the profile through a read-only state machine:
+  legacy live/backup, migration receipt, archive, and projection-recovery evidence are
+  validated first; canonical authority is then inspected read-only before mutating
+  recovery or projection reconciliation. A valid legacy live Dataset is accepted as
+  migration input only when that authority state is legal; a genuinely empty profile
+  may initialize canonical state, while backup-only, malformed, unsafe, contradictory,
+  orphaned, or projection-only evidence fails closed without guessing an authority.
+- The migration receipt `legacy-migration.json` records the exact SHA-256 identity of
+  `telemetry.json` and optional `telemetry.backup.json`. `legacy-migration.next.json`
+  makes receipt publication restart-safe. Canonical publication and semantic reload
+  are verified before the live and backup files move to
+  `telemetry.legacy-archive.json` and `telemetry.backup.legacy-archive.json`.
+  Archive bytes remain exact and archived legacy files are never promoted back to
+  production authority.
+- Migration recovery accepts only legal receipt transitions and matching file
+  identities. Changes to legacy evidence, receipts, canonical targets, or retirement
+  state preserve the evidence and block startup. Registry seeding after migration or
+  on a new profile uses the ordinary canonical `mutate()` path.
+- `load()`, `initializeRegistry()`, `preview()`, and `mutate()` are queue-serialized
+  over one canonical store instance. `mutate()` retains revision checks and the
+  shared `applyMutation`/import semantics through `CanonicalArtifactStore`; returned
+  `LoadedData.path` identifies the canonical artifact directory.
+
 ### `TelemetryStore`
 
 Important symbols in [`src/main/store.ts`](src/main/store.ts):
 
-- `readFromDisk()` reads and validates `telemetry.json`, preserves the
-  existing files on failure, decodes UTF-8 with fatal error handling, runs
-  `normalizeDataset()` for v1/v2 compatibility, and caches the exact loaded
-  live bytes plus a fingerprint of `telemetry.backup.json`.
+- `readFromDisk()` remains the bounded migration/compatibility reader: it reads and
+  validates `telemetry.json`, preserves the existing files on failure, decodes UTF-8
+  with fatal error handling, and runs `normalizeDataset()` for v1/v2 compatibility.
+- Exact live/backup byte identity and legacy recovery semantics are admitted by
+  `ProductionStore` before canonical publication. `TelemetryStore` is not the normal
+  production write authority after S11.
 - `requireNewProfile()` distinguishes a genuinely empty profile from late
   live/backup appearance and blocks unsafe writes.
-- `initializeRegistry()` loads existing data and, when the registry is absent,
-  installs the bundled seed through the ordinary revision-checked mutation
-  path. Registry reconciliation, identity attachment, and pricing backfill
-  publish as one transaction.
+- Its registry and mutation methods remain available for legacy tests and bounded
+  compatibility paths. Normal production registry initialization now installs the
+  bundled seed through `ProductionStore` and canonical `mutate()`.
 - `mutate()` queues operations, applies the validated mutation to detached
-  state, rechecks live and backup provenance immediately before writing,
-  rotates the prior live revision to `telemetry.backup.json`, then atomically
-  replaces the live file. Reading a v1 file does not rewrite it, create a
-  backup, or increment revision; the first ordinary mutation publishes v2 and
-  rotates the exact original live bytes into the backup. PennyTel refreshes
-  its own backup fingerprint after rotation so a failed live replacement can
-  be retried safely.
+  state, rechecks legacy provenance, rotates the prior live revision to
+  `telemetry.backup.json`, then atomically replaces the live file. This remains the
+  legacy compatibility behavior and is not reachable from normal post-cutover
+  production writes.
 - `atomicWrite()` writes a unique mode-600 temporary file, flushes it, and
   renames it into place. The queue is retained after failures so a later
   operation can retry without publishing the failed candidate.
 
-Storage files are in the Electron app-data directory by default, or the
-absolute directory named by `PENNYTEL_DATA_DIR`. A live file with any backup
-evidence is treated as recovery-sensitive; a missing live file plus backup
+Storage files are in the Electron app-data directory by default, or the absolute
+directory named by `PENNYTEL_DATA_DIR`. Canonical artifacts, projection state,
+migration receipts, and legacy archive evidence remain outside ASAR. A live file with
+any backup evidence is treated as recovery-sensitive; a missing live file plus backup
 evidence blocks loading/writing rather than silently starting empty.
 
-### SQLite projection (S9, extended by S10)
+### SQLite projection (S9, extended by S10 and S11)
 
 - The SQLite projection file is `pennytel-projection.sqlite`, created by
   [`src/main/sqlite-projection.ts`](src/main/sqlite-projection.ts) in an
   absolute isolated user-data/QA directory. It is a rebuildable relational
-  projection for future storage work, not a second source of truth or a cutover
-  of the JSON authority.
+  projection under canonical production authority, not a second source of truth
+  or a migration authority.
 - `SqliteProjectionRepository` uses deterministic application/schema admission,
   STRICT tables for the five current Dataset arrays, relationship foreign keys,
   query indexes, and JSON retention for fields that do not need relational
@@ -229,13 +282,15 @@ evidence blocks loading/writing rather than silently starting empty.
   representative create/restart round trips, known-zero versus omitted
   telemetry, nested evidence, registry reconstruction, connection settings,
   and an outside-ASAR path. S10 extends the same entry with canonical artifact
-  publication interruption and restart recovery. [`scripts/electron-storage-qa.mjs`](scripts/electron-storage-qa.mjs)
+  publication interruption and restart recovery; S11 extends it with legacy
+  migration/archive, startup refusal, projection quarantine/rebuild, canonical
+  mutation, and no-dual-write evidence. [`scripts/electron-storage-qa.mjs`](scripts/electron-storage-qa.mjs)
   runs those phases in an isolated temporary directory for built and packaged
   Electron, then checks packaged restart behavior, writable artifact paths
   outside ASAR, and the unchanged renderer
   sandbox/context-isolation/no-node-integration and preload API boundary.
 
-### Canonical JSON artifact store (S10)
+### Canonical JSON artifact store (S10, production authority used by S11)
 
 - `CanonicalArtifactStore` validates the current Dataset through the shared
   validation/normalization path, bounds record and byte work, and publishes a
@@ -250,25 +305,31 @@ evidence blocks loading/writing rather than silently starting empty.
   pathname-sensitive writes and between publish phases. The flattened layout
   reduces the replaceable nested-parent risk, while the narrow portable
   pathname check-to-kernel-use race remains an explicit limitation.
+- `inspectStartup()` is the S11 read-only admission step. It checks canonical root
+  identity, pending receipt shape/state, and any supplied legacy migration Dataset
+  before S10 recovery is allowed to remove work, complete publication, or project.
 - Recovery is receipt-driven and idempotent. Prepared transactions are checked
   against the prior canonical state and discarded; publishing or published
   transactions finish canonical publication, verify the canonical digest, and
   reproject before clearing durable state. Missing or contradictory artifacts,
   unsafe substitutions, or projection-only state fail closed rather than
-  inferring authority. This subsystem does not perform S11's full artifact
-  scan/rebuild or legacy migration.
+  inferring authority. `ProductionStore` owns the surrounding legacy migration,
+  retirement, normal IPC composition, and safe projection-open/rebuild path; the
+  canonical store remains the single artifact publication/recovery authority.
 
 ### Import and export paths
 
 - Native single-file import uses `src/main/index.ts`'s open-file dialog, a 10 MB limit, and
-  `TelemetryStore.preview()`/`mergeImport()` before the renderer confirms the
+  `ProductionStore.preview()`/`mergeImport()` before the renderer confirms the
   additive transaction.
-- Batch import uses the main-process folder picker plus `discoverBatch()` to find only bounded `.pennytel.json` artifacts, previews the combined source set through `mergeBatchImport()`, then consumes one opaque preview token and publishes through one revision-checked `TelemetryStore.mutate({ kind: 'batch-import', ... })` transaction. Identical records skip; conflicting stable IDs or invalid relationships fail closed without partial publication.
+- Batch import uses the main-process folder picker plus `discoverBatch()` to find only bounded `.pennytel.json` artifacts, previews the combined source set through `mergeBatchImport()`, then consumes one opaque preview token and publishes through one revision-checked `ProductionStore.mutate({ kind: 'batch-import', ... })` transaction. Identical records skip; conflicting stable IDs or invalid relationships fail closed without partial publication.
 - Raw dataset import accepts `schemaVersion: 1` or `2`, normalizes v1 before
   additive merge/relationship validation, and ignores imported revisions in
   favor of the local transaction revision. Registry seed JSON and comparison-
   analysis JSON are explicitly rejected from telemetry import.
-- Raw dataset export reads the main-owned snapshot and always emits schema v2.
+- Batch commit, raw dataset export, comparison export, and comparison-plan reads use
+  the same canonical `ProductionStore` snapshot and mutation authority. Raw dataset
+  export reads the main-owned canonical snapshot and always emits schema v2.
   Comparison export is a distinct derived artifact with
   `kind: "pennytel-comparison"` and is not importable. Slice 5 adds bounded
   filter context and shared analytics to that derived artifact without
@@ -326,7 +387,9 @@ evidence blocks loading/writing rather than silently starting empty.
   provenance, and lets authored registry history own dates from its first
   authored entry onward.
 
-The bundled seed is statically imported by `src/main/store.ts` from
+The bundled seed is statically imported by `src/main/store.ts` for legacy
+compatibility and by `src/main/production-store.ts` for normal canonical
+production initialization from
 [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json), so packaged runtime does not require a repository `docs/` directory. A registry update replaces the installed registry document but must retain model/provider identities referenced by existing runs; retirement is supported where deletion would break provenance.
 
 ### Legacy catalog and cost
@@ -491,10 +554,12 @@ The bundled seed is statically imported by `src/main/store.ts` from
   and environment constraints as inert text; absent and partial values remain
   visibly Unknown and raw payloads are not exposed.
 - [`src/renderer/src/pages/Data.tsx`](src/renderer/src/pages/Data.tsx) shows
-  the storage path, exports raw JSON, accepts pasted/file JSON, previews counts
-  and skips, and commits only after the user confirms. It presents the v2
-  import contract while explaining automatic v1 normalization and v2 raw
-  exports.
+  the canonical artifact storage path, exports raw JSON, accepts pasted/file JSON,
+  previews counts and skips, and commits only after the user confirms. Its storage
+  copy explains canonical JSON artifacts, preserved migrated legacy archive evidence,
+  and separate operator exports; it no longer describes `telemetry.backup.json` as
+  the live previous-revision mechanism. It presents the v2 import contract while
+  explaining automatic v1 normalization and v2 raw exports.
 - [`src/renderer/src/components/RecordEditor.tsx`](src/renderer/src/components/RecordEditor.tsx)
   is the generic field-driven editor for all five tables. It keeps drafts
   local, validates before save, preserves failed drafts, and requires explicit
@@ -535,10 +600,10 @@ under `tests/**/*.test.{ts,tsx}`.
 | Dataset validation and transactions | [`tests/data.test.ts`](tests/data.test.ts) | Canonical v2 shape, v1/v2 normalization and import, enums/bounds, relationships, stale revisions, snapshot immutability/reselection, protected deletion, additive import, conflicts and malformed/oversized input |
 | Execution evidence contract | [`tests/execution-evidence.test.ts`](tests/execution-evidence.test.ts), [`tests/execution-evidence-fixture.json`](tests/execution-evidence-fixture.json) | Deterministic v1 migration, v2 round-trip, strict nested bounds/unknown-field and privacy rejection, omitted/partial/zero evidence, provenance IDs/hash handling, token semantics, quota attribution isolation, malformed timestamp/number/count/percentage rejection, and price/relationship/revision preservation |
 | Registry contract and pricing authority | [`tests/registry.test.ts`](tests/registry.test.ts), [`tests/registry-fixtures.ts`](tests/registry-fixtures.ts) | Canonical seed, strict registry validation, identity ambiguity, dated/exclusive pricing, backfill, v1 portability, legacy migration/precedence, referenced identity retention |
-| Durable storage and recovery | [`tests/store.test.ts`](tests/store.test.ts), [`tests/registry-store.test.ts`](tests/registry-store.test.ts) | New/existing profiles, strict UTF-8/original-byte preservation, v1 read-without-rewrite and first-mutation migration, live/backup recovery evidence, external changes, atomic replacement failure, serialized/stale writers, registry startup and persisted backfill |
+| Durable storage and recovery | [`tests/store.test.ts`](tests/store.test.ts), [`tests/registry-store.test.ts`](tests/registry-store.test.ts), [`tests/production-store.test.ts`](tests/production-store.test.ts) | Legacy reader compatibility plus canonical production authority, genuinely new profiles, v1/v2 one-way migration, registry present/absent seeding, exact live/backup archives, receipt and restart recovery, contradiction and unsafe evidence refusal, no dual writes, projection-only recovery refusal, and serialized/stale writer protection |
 | SQLite projection/service | [`tests/sqlite-projection.test.ts`](tests/sqlite-projection.test.ts) | Main-process service/adapter round trips, deterministic admission and schema/settings, strict relationships/indexes, rollback, close/reopen, bounded record/byte work, physical-reality checks, relational/JSON reconciliation, serialized metadata, nested evidence, registry, Unknown/known-zero preservation, and hostile valid-ID relational identity/relationship regression coverage |
 | Canonical artifact store/publish recovery | [`tests/canonical-artifact-store.test.ts`](tests/canonical-artifact-store.test.ts) | Self-describing canonical identity/path safety, artifact-before-projection authority, staged metadata-last publication, durable receipt phases, interruption/recovery idempotency, tombstoned deletes, malformed/foreign admission, bounded work, root/nested substitution checks, and hostile valid IDs |
-| Filesystem-safe export | [`tests/export.test.ts`](tests/export.test.ts) | Regular destinations, live/backup aliases, links, dangling/unresolvable identities, raw and comparison output |
+| Filesystem-safe export | [`tests/export.test.ts`](tests/export.test.ts), [`tests/production-store.test.ts`](tests/production-store.test.ts) | Regular destinations, canonical/projection/migration/archive surfaces, live/backup aliases, links, dangling/unresolvable identities, raw and comparison output |
 | Configuration identity and comparison | [`tests/configuration.test.ts`](tests/configuration.test.ts), [`tests/configuration-fixtures.ts`](tests/configuration-fixtures.ts), [`tests/comparison.test.ts`](tests/comparison.test.ts) | Canonical/alias identity, recorded thinking and Unknown behavior, ExtraHigh/XHigh presentation, collision-safe labels and bounded derived requests, multi-candidate/stage selection, grouping/filtering/export, raw import and historical cost/snapshot stability |
 | Comparison calculations/export | [`tests/comparison.test.ts`](tests/comparison.test.ts) | Cohort qualification, ORed stage scopes, full lifecycle retention, source and derived filters/grouping/order/selection, candidate evidence coverage, quality, unknown/zero/partial measurements, stale/untrusted export requests |
 | Comparison plan runner | [`tests/comparison-plan.test.ts`](tests/comparison-plan.test.ts), [`tests/compare-ui.test.tsx`](tests/compare-ui.test.tsx), [`tests/export.test.ts`](tests/export.test.ts) | Strict plan validation, bounded IDs/entries, ordered multi-comparison execution, shared revision/context analysis, cancellation/failure UI state, and safe derived-result export |
@@ -563,9 +628,9 @@ scripts exercise the real main/preload/renderer/filesystem path.
   and `npm run build`.
 - [`electron.vite.config.ts`](electron.vite.config.ts) builds separate main,
   preload, and renderer bundles; the main build emits the normal `index` entry
-  plus the isolated `sqlite-projection-qa` Electron entry, which now exercises
-  both S9 projection and S10 canonical artifact publish/recovery, and the
-  renderer alias is `@renderer`.
+  plus the isolated `sqlite-projection-qa` Electron entry, which exercises S9
+  projection, S10 canonical artifact publish/recovery, and S11 production
+  migration/cutover, and the renderer alias is `@renderer`.
 - [`electron-builder.yml`](electron-builder.yml) packages app ID
   `com.pennyos.pennytel` as PennyTel for Windows, macOS, and Linux targets.
   It excludes source/tests/docs from the packaged app and unpacks
@@ -573,9 +638,13 @@ scripts exercise the real main/preload/renderer/filesystem path.
 - `npm start` previews the production build. `npm run dev` launches Electron
   through electron-vite. Build output is under `out/`; packaged artifacts use
   `dist/` when produced.
-- `npm run test:storage-electron` runs the focused built Electron projection
-  and canonical artifact publish/recovery create/restart/security smoke in
-  [`scripts/electron-storage-qa.mjs`](scripts/electron-storage-qa.mjs).
+- `npm run test:storage-electron` runs the focused built Electron projection,
+  canonical artifact publish/recovery, and S11 legacy migration/archive/cutover
+  create/restart/security smoke in [`scripts/electron-storage-qa.mjs`](scripts/electron-storage-qa.mjs).
+- [`scripts/canonical-qa.mjs`](scripts/canonical-qa.mjs) is the read-only QA helper
+  that reconstructs canonical snapshots and Datasets from artifact metadata and
+  record files. Normal Electron QA scripts use it to assert canonical state after
+  load, mutation, import/export, comparison, and restart.
 - `npm run test:electron` runs a build followed by the actual Electron QA
   scripts, beginning with that storage smoke and then [`scripts/electron-smoke.mjs`](scripts/electron-smoke.mjs),
   [`scripts/electron-repair-qa.mjs`](scripts/electron-repair-qa.mjs),
@@ -591,6 +660,11 @@ scripts exercise the real main/preload/renderer/filesystem path.
   `test-results/electron-qa-*`/repair/new-profile/registry/configuration-runtime-*
   profiles, real IPC,
   disk, restart, import/export, registry, recovery, and narrow-window checks.
+  The normal smoke, repair, new-profile, registry, configuration, accepted-outcome,
+  comparison-plan, execution-evidence, and batch-import scripts inspect canonical
+  artifacts through `canonical-qa.mjs`; legacy fixtures are migration inputs and
+  assertions target preserved archives and absence of post-cutover live/backup
+  writes.
 - `electron-configuration-qa.mjs` uses a synthetic isolated profile and the
   real Electron path to prove known configurations, aliases, thinking
   `Unknown`, `ExtraHigh / XHigh` presentation, canonical/family/model rollups,
@@ -610,17 +684,17 @@ scripts exercise the real main/preload/renderer/filesystem path.
   ordinary comparison export remains distinct, and check the plan-result
   artifact's non-importable boundary.
 - [`scripts/electron-execution-evidence-qa.mjs`](scripts/electron-execution-evidence-qa.mjs)
-  uses isolated profiles and the real Electron path to verify v1 load without
-  rewrite, first-mutation v2 migration with exact-byte backup, v2 raw
-  export/import, additive child compatibility, run-editor evidence edits and
-  clearing, strict privacy/quota validation without publication, restart
-  persistence, and malformed UTF-8 preservation/blocking. It invokes the Slice 7
+  uses isolated profiles and the real Electron path to verify v1 startup migration
+  with exact-byte legacy archiving, canonical v2 raw export/import, additive child
+  compatibility, run-editor evidence edits and clearing, strict privacy/quota
+  validation without publication, restart persistence, and malformed UTF-8
+  preservation/blocking. It invokes the Slice 7
   child [`scripts/electron-evidence-analysis-qa.mjs`](scripts/electron-evidence-analysis-qa.mjs),
   which exercises a realistic evidence-bearing dataset through read-only run
   detail, evidence distributions/coverage, exact and missing filters/groups,
-  ordinary comparison export, comparison-plan result parity, raw/live/backup
+  ordinary comparison export, comparison-plan result parity, canonical/archive
   stability, narrow-window layout, and Electron security invariants.
-- [`scripts/electron-batch-import-qa.mjs`](scripts/electron-batch-import-qa.mjs) uses an isolated profile and the real Electron path to prove nested artifact discovery, mixed v1/v2 batch preview, one atomic revision/backup publication, duplicate skips, failed-commit preservation/token invalidation, late malformed rejection, restart persistence, and the unchanged renderer security boundary.
+- [`scripts/electron-batch-import-qa.mjs`](scripts/electron-batch-import-qa.mjs) uses an isolated profile and the real Electron path to prove nested artifact discovery, mixed v1/v2 batch preview, one canonical revision publication without legacy live/backup writes, duplicate skips, failed-commit preservation/token invalidation, late malformed rejection, restart persistence, and the unchanged renderer security boundary.
 - `electron-analytics-qa.mjs` remains the general legacy analytics runtime
   helper. Against its isolated profile it verifies descriptive distributions and coverage,
   source-linked charts, UTC date trends, missing-versus-literal-Unknown
@@ -648,24 +722,27 @@ scripts exercise the real main/preload/renderer/filesystem path.
 
 ### Invariants future workers must preserve
 
-- The main process owns authoritative dataset persistence; renderer state is a
-  detached view/draft and every mutation is revision-checked.
-- SQLite projection state is not normal production authority: `TelemetryStore`
-  and `telemetry.json` remain the live persistence path, and the
-  renderer/preload/IPC boundary has no SQLite, database-path, SQL, artifact-path,
-  or general filesystem authority. Inside the isolated S10 subsystem, canonical
-  JSON artifacts outrank SQLite, which remains rebuildable projection state.
+- The main process owns authoritative dataset persistence through
+  `ProductionStore`; canonical JSON artifacts are normal production authority,
+  renderer state is a detached view/draft, and every mutation is revision-checked.
+- SQLite projection state is downstream and rebuildable: `ProductionProjection`
+  can quarantine and recreate safe invalid projection files only after canonical
+  authority is admitted. `TelemetryStore` and `telemetry.json` remain bounded
+  legacy migration/compatibility surfaces, not the normal live persistence path.
+  The renderer/preload/IPC boundary has no SQLite, database-path, SQL,
+  artifact-path, migration-control, or general filesystem authority.
   Future storage work should enter through the main-process
   `PennyTelStorageService`/`DatasetProjectionRepository` seam rather than
   importing `node:sqlite` into application or renderer code.
-- Writes are validated, serialized, flushed, and atomically replaced. Existing
-  live data and recovery evidence are preserved on invalid/corrupt/failed
-  operations. External live or backup changes fail closed before backup
-  rotation or cached-state publication.
-- The canonical raw dataset is schema v2. `normalizeDataset()` is detached
-  and deterministic: v1 reads/imports become in-memory v2 without rewriting
-  storage, and only the first ordinary mutation publishes v2 while preserving
-  the exact original v1 live bytes in the backup rotation.
+- Writes are validated, serialized, flushed, and atomically published. Existing
+  canonical data and migration/projection recovery evidence are preserved on
+  invalid, corrupt, contradictory, or failed operations. External legacy,
+  receipt, canonical, projection, or archive changes fail closed before
+  retirement, reconciliation, or cached-state publication.
+- The canonical raw dataset is schema v2. `normalizeDataset()` is detached and
+  deterministic: v1 reads/imports become in-memory v2, S11 migration publishes
+  canonical v2 while preserving exact original legacy bytes in archive evidence,
+  and external raw import/export compatibility remains available.
 - `Run.executionEvidence` is optional normalized source evidence, not a second
   run identity or a source of PennyOS workflow labels. Session/turn IDs and
   source hashes are provenance; table record IDs remain the import/conflict
@@ -721,8 +798,8 @@ scripts exercise the real main/preload/renderer/filesystem path.
   environment, filename, or provenance. Evidence filters qualify a cohort run,
   while accepted-outcome economics reopens the full relevant lifecycle.
 - Raw dataset export is canonical/importable; comparison export is derived and
-  explicitly non-importable. Export destinations may not alias live/backup
-  storage.
+  explicitly non-importable. Export destinations may not alias canonical,
+  projection, migration, archive, or legacy recovery storage.
 - Comparison plans and their result bundles are derived analysis artifacts;
   they do not mutate telemetry, are not raw export substitutes, and are not
   importable through the telemetry merge path.
@@ -737,18 +814,20 @@ scripts exercise the real main/preload/renderer/filesystem path.
 
 - New telemetry ingestion should enter through the typed `Mutation` union and
   `applyMutation`/`mergeImport`, with `validateRecord`/`validateDataset` and
-  `TelemetryStore.mutate` remaining the transaction gates.
+  `ProductionStore.mutate`/`CanonicalArtifactStore` remaining the normal
+  transaction gates. `TelemetryStore` remains only for bounded legacy reading,
+  migration compatibility, and legacy-focused tests.
 - Future replaceable persistence adapters belong behind
   `src/main/storage-service.ts`; the accepted S9 SQLite implementation is
-  `src/main/sqlite-projection.ts`, and the S10 canonical publish coordinator is
-  `src/main/canonical-artifact-store.ts`. Keep `node:sqlite` and all artifact
-  filesystem authority main-process-only, keep projection/artifact/receipt data
-  outside ASAR, preserve `TelemetryStore` / `telemetry.json` as normal
-  production authority until S11's explicit cutover, and rerun the
-  built/packaged Linux Electron storage smoke when the Electron/runtime version
-  changes. S10 does not introduce legacy migration, full rebuild/reconciliation,
-  Reporter/Codex ingestion, or a new renderer persistence path; those remain
-  later-slice responsibilities.
+  `src/main/sqlite-projection.ts`, S10's canonical publish coordinator is
+  `src/main/canonical-artifact-store.ts`, and S11's normal authority/migration
+  coordinator is `src/main/production-store.ts` with filesystem safety in
+  `src/main/storage-files.ts`. Keep `node:sqlite`, canonical artifacts, migration
+  receipts, archives, and all filesystem authority main-process-only and outside
+  ASAR. Preserve canonical JSON as production authority, keep SQLite rebuildable,
+  and rerun the built/packaged Linux Electron storage smoke when the
+  Electron/runtime version changes. Do not add a renderer persistence path or a
+  fallback that writes retired legacy files.
 - The schema-v2 execution-evidence contract is split deliberately:
   `src/shared/types.ts` relates optional evidence to `Run`,
   `src/shared/execution-evidence.ts` owns its nested types and strict
@@ -794,13 +873,13 @@ scripts exercise the real main/preload/renderer/filesystem path.
 
 - The repository documents and verifies local Linux Electron workflows; packaged
   installers and non-Linux runtime environments are configured but not verified
-  here. S9/S10 built and unpacked/ASAR storage evidence is Linux-only; Windows,
-  macOS, and installer-format storage behavior remain unverified.
+  here. S9/S10/S11 built and packaged/ASAR storage evidence is Linux-only;
+  Windows, macOS, and installer-format storage behavior remain unverified.
 - Native file-picker interaction itself is harness-routed rather than manually
   exercised. Physical power-loss behavior is not directly tested. The S10
-  flattened layout and repeated identity checks reduce pathname substitution
-  exposure but cannot eliminate the narrow portable pathname check-to-kernel-use
-  race; neither limitation is claimed solved.
+  flattened layout, S11 migration receipts, and repeated identity checks reduce
+  pathname substitution exposure but cannot eliminate the narrow portable
+  pathname check-to-kernel-use race; neither limitation is claimed solved.
 - There is no production dataset, network price fetch, model execution, cloud
   or Sheet synchronization, or statistical-significance machinery in this
   repository. Unknown telemetry is intentionally not reconstructed.
