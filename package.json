@@ -20,7 +20,8 @@
     "build:mac": "electron-vite build && electron-builder --mac",
     "build:linux": "electron-vite build && electron-builder --linux",
     "test": "vitest run",
-    "test:electron": "npm run build && node scripts/electron-smoke.mjs && node scripts/electron-repair-qa.mjs && node scripts/electron-new-profile-qa.mjs && node scripts/electron-registry-qa.mjs && node scripts/electron-configuration-qa.mjs && node scripts/electron-accepted-outcome-qa.mjs && node scripts/electron-comparison-plan-qa.mjs && node scripts/electron-execution-evidence-qa.mjs && node scripts/electron-batch-import-qa.mjs",
+    "test:storage-electron": "node scripts/electron-storage-qa.mjs",
+    "test:electron": "npm run build && node scripts/electron-storage-qa.mjs && node scripts/electron-smoke.mjs && node scripts/electron-repair-qa.mjs && node scripts/electron-new-profile-qa.mjs && node scripts/electron-registry-qa.mjs && node scripts/electron-configuration-qa.mjs && node scripts/electron-accepted-outcome-qa.mjs && node scripts/electron-comparison-plan-qa.mjs && node scripts/electron-execution-evidence-qa.mjs && node scripts/electron-batch-import-qa.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {

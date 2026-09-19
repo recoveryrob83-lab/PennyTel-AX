@@ -3,7 +3,16 @@ import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
-  main: {},
+  main: {
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          'sqlite-projection-qa': resolve('src/main/sqlite-projection-qa.ts')
+        }
+      }
+    }
+  },
   preload: {},
   renderer: {
     resolve: {
