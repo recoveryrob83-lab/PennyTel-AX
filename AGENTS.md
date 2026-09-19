@@ -262,12 +262,12 @@ Return verification matrix/results, classified findings, remaining uncertainty, 
 
 Unless the Issue explicitly changes them:
 
-- Electron main owns authoritative dataset persistence.
-- Until an explicit later cutover slice changes authority, `TelemetryStore` / `telemetry.json` remain the production persistence authority; SQLite is not yet a competing source of truth.
-- The approved vNext storage seam is a main-process Storage Service/repository contract above replaceable storage adapters. Application/renderer/analytics code must not depend directly on a SQLite driver.
+- Electron main owns authoritative dataset persistence through `ProductionStore`.
+- Canonical JSON artifacts are normal production authority. `TelemetryStore` / `telemetry.json` are bounded legacy migration/compatibility surfaces only; SQLite remains a rebuildable downstream projection and is never a competing source of truth.
+- The approved storage seam is the main-process Storage Service/repository contract above replaceable projection adapters. Application/renderer/analytics code must not depend directly on a SQLite driver.
 - `node:sqlite` is the approved runtime-projection driver behind that adapter. Keep driver access main-process-only, keep synchronous work bounded, keep database files outside ASAR/application resources, and re-run packaged SQLite QA on Electron/runtime upgrades.
 - Persistence remains validated, revision-aware, serialized, and atomic.
-- Storage provenance and backup/recovery protections must not be weakened.
+- Canonical publication, migration/archive evidence, and recovery protections must not be weakened.
 - Import/update operations fail safely rather than partially publishing corrupt state.
 - Historical price snapshots are immutable evidence unless deliberately corrected through an authorized path.
 - Raw dataset import/export remains distinct from derived comparison export.
