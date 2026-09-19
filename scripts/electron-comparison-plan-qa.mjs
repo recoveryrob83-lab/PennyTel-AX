@@ -1,5 +1,6 @@
 // Real Electron/preload/IPC/dialog/disk QA using an isolated synthetic profile.
 import { _electron as electron } from 'playwright'
+import { canonicalDataset, canonicalSnapshot } from './canonical-qa.mjs'
 import assert from 'node:assert/strict'
 import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -48,9 +49,8 @@ try {
     repair: await page.getByRole('checkbox', { name: 'Repair (role: Repair)' }).isChecked()
   }
 
-  const telemetryPath = join(directory, 'telemetry.json')
-  const telemetryBefore = await readFile(telemetryPath, 'utf8')
-  const authoritative = JSON.parse(telemetryBefore)
+  const telemetryBefore = await canonicalSnapshot(directory)
+  const authoritative = await canonicalDataset(directory)
   const planPath = join(directory, 'comparison-plan.json')
   const outputPath = join(directory, 'comparison-plan-results.json')
   const plan = {
@@ -120,7 +120,7 @@ try {
     { kind: 'role', value: 'Repair' }
   ])
   assert.equal(bundle.results[2].analysis.context.stageScopes, undefined)
-  assert.equal(await readFile(telemetryPath, 'utf8'), telemetryBefore)
+  assert.equal(await canonicalSnapshot(directory), telemetryBefore)
   assert.deepEqual(
     {
       project: await page.getByLabel('Filter Project').inputValue(),
@@ -138,7 +138,7 @@ try {
   await page.getByRole('button', { name: 'Export comparison' }).click()
   await page.getByRole('status').filter({ hasText: comparisonPath }).waitFor()
   assert.equal(JSON.parse(await readFile(comparisonPath, 'utf8')).kind, 'pennytel-comparison')
-  assert.equal(await readFile(telemetryPath, 'utf8'), telemetryBefore)
+  assert.equal(await canonicalSnapshot(directory), telemetryBefore)
 
   const preferences = await application.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0]

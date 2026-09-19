@@ -1,6 +1,7 @@
 import { _electron as electron } from 'playwright'
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises'
+import { canonicalDataset, canonicalSnapshot } from './canonical-qa.mjs'
 import { join, resolve } from 'node:path'
 await mkdir(resolve('test-results'), { recursive: true })
 const profile = await mkdtemp(resolve('test-results/batch-runtime-'))
@@ -38,14 +39,14 @@ try {
   let page = await launch()
   const load = () => page.evaluate(async () => (await window.pennytel.load()).data)
   const before = await load()
-  const original = await readFile(join(profile, 'telemetry.json'), 'utf8')
+  const original = await canonicalSnapshot(profile)
   await application.evaluate(({ dialog }, folder) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] })
   }, folder)
   await page.getByRole('navigation').getByRole('button', { name: 'Data & portability' }).click()
   await page.getByRole('button', { name: 'Choose batch folder', exact: true }).click()
   await page.getByRole('heading', { name: 'Batch ready to add · 20 files', exact: true }).waitFor()
-  assert.equal(await readFile(join(profile, 'telemetry.json'), 'utf8'), original)
+  assert.equal(await canonicalSnapshot(profile), original)
   await page.getByRole('button', { name: 'Import batch', exact: true }).click()
   await page
     .getByRole('status')
@@ -55,11 +56,11 @@ try {
   assert.equal(saved.revision, before.revision + 1)
   assert.equal(saved.runs.length, 20)
   assert.equal(saved.slices.length, 1)
-  assert.equal(await readFile(join(profile, 'telemetry.backup.json'), 'utf8'), original)
+  await assert.rejects(readFile(join(profile, 'telemetry.json')), { code: 'ENOENT' })
+  await assert.rejects(readFile(join(profile, 'telemetry.backup.json')), { code: 'ENOENT' })
   // Force a real store rejection after preview, using only this isolated QA profile.
   const backupPath = join(profile, 'telemetry.backup.json')
-  const liveBeforeFailure = await readFile(join(profile, 'telemetry.json'), 'utf8')
-  const backupBeforeFailure = await readFile(backupPath, 'utf8')
+  const liveBeforeFailure = await canonicalSnapshot(profile)
   await page.getByRole('button', { name: 'Choose batch folder', exact: true }).click()
   await page.getByRole('heading', { name: 'Batch ready to add · 20 files', exact: true }).waitFor()
   await writeFile(backupPath, 'QA changed backup evidence')
@@ -74,10 +75,10 @@ try {
       .waitFor()
     assert.equal(await page.getByRole('heading', { name: /Batch ready to add/ }).count(), 0)
     assert.equal(await page.getByRole('button', { name: 'Import batch', exact: true }).count(), 0)
-    assert.deepEqual(await load(), saved)
-    assert.equal(await readFile(join(profile, 'telemetry.json'), 'utf8'), liveBeforeFailure)
+    assert.deepEqual(await canonicalDataset(profile), saved)
+    assert.equal(await canonicalSnapshot(profile), liveBeforeFailure)
   } finally {
-    await writeFile(backupPath, backupBeforeFailure)
+    await unlink(backupPath)
   }
   // Verify the main-process token remains consumed even after the failure is removed.
   const failedPreview = await page.evaluate(() => window.pennytel.openBatchImport())
@@ -92,9 +93,9 @@ try {
         return error.message
       }
     }, failedPreview.token)
-    assert.match(error, /Backup changed outside PennyTel/)
+    assert.match(error, /Storage evidence changed outside PennyTel/)
   } finally {
-    await writeFile(backupPath, backupBeforeFailure)
+    await unlink(backupPath)
   }
   const retryError = await page.evaluate(async (token) => {
     try {
@@ -106,8 +107,8 @@ try {
   }, failedPreview.token)
   assert.match(retryError, /Select and preview the batch folder again/)
   assert.deepEqual(await load(), saved)
-  assert.equal(await readFile(join(profile, 'telemetry.json'), 'utf8'), liveBeforeFailure)
-  // Backup provenance includes ctime: reopening is required after external QA changes.
+  assert.equal(await canonicalSnapshot(profile), liveBeforeFailure)
+  // Exercise the same fresh-preview retry after an actual application restart.
   await application.close()
   application = undefined
   page = await launch()
@@ -125,14 +126,14 @@ try {
   const retried = await load()
   assert.equal(retried.revision, saved.revision + 1)
   assert.deepEqual(retried.runs, saved.runs)
-  assert.equal(await readFile(backupPath, 'utf8'), liveBeforeFailure)
+  await assert.rejects(readFile(backupPath), { code: 'ENOENT' })
   saved = retried
   await writeFile(join(folder, 'zz-late.pennytel.json'), '{')
   await page.getByRole('button', { name: 'Choose batch folder', exact: true }).click()
   await page.getByRole('alert').filter({ hasText: 'zz-late.pennytel.json' }).waitFor()
   assert.deepEqual(await load(), saved)
-  assert.deepEqual(JSON.parse(await readFile(join(profile, 'telemetry.json'), 'utf8')), saved)
-  assert.equal(await readFile(backupPath, 'utf8'), liveBeforeFailure)
+  assert.deepEqual(await canonicalDataset(profile), saved)
+  await assert.rejects(readFile(backupPath), { code: 'ENOENT' })
   const preferences = await application.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences()
   )
@@ -145,7 +146,7 @@ try {
   page = await launch()
   assert.deepEqual(await load(), saved)
   console.log(
-    `PASS: 20 nested artifacts, mixed v1/v2, ignored unrelated files, UI aggregate preview/one-click import, duplicate counts, single revision/backup, failed commit clears UI and preserves data, consumed-token rejection/fresh-preview retry, late malformed rejection, security and restart persistence. Profile: ${profile}`
+    `PASS: 20 nested artifacts, mixed v1/v2, ignored unrelated files, UI aggregate preview/one-click import, duplicate counts, single canonical revision, failed commit clears UI and preserves data, consumed-token rejection/fresh-preview retry, late malformed rejection, security and restart persistence. Profile: ${profile}`
   )
 } finally {
   if (application) await application.close()

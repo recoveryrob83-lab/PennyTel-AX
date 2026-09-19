@@ -93,9 +93,7 @@ export default function App(): React.JSX.Element {
     setDeleteError('')
     try {
       await mutate({ kind: 'delete', table: deletion.table, id: deletion.record.id })
-      setNotice(
-        `${singular[deletion.table]} deleted. The previous revision is in the local backup.`
-      )
+      setNotice(`${singular[deletion.table]} deleted and saved.`)
       setDeletion(undefined)
     } catch (e) {
       setDeleteError((e as Error).message)

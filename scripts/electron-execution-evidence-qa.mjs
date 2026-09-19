@@ -1,5 +1,6 @@
 // Real Electron schema-v2 QA; all data and source identifiers are synthetic.
 import { _electron as electron } from 'playwright'
+import { canonicalDataset, canonicalSnapshot } from './canonical-qa.mjs'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -62,6 +63,7 @@ const legacy = {
 }
 const live = join(directory, 'telemetry.json')
 const backup = join(directory, 'telemetry.backup.json')
+const archive = join(directory, 'telemetry.legacy-archive.json')
 const bytes = JSON.stringify(legacy) + '\n'
 await writeFile(live, bytes)
 let application, page
@@ -104,15 +106,16 @@ async function exportTo(path) {
 try {
   await launch(directory)
   assert.deepEqual(await load(), { ...legacy, schemaVersion: 2 })
-  assert.equal(await readFile(live, 'utf8'), bytes)
+  assert.equal(await readFile(archive, 'utf8'), bytes)
+  await assert.rejects(readFile(live), { code: 'ENOENT' })
   assert.deepEqual(await exportTo(join(directory, 'migrated-export.json')), {
     ...legacy,
     schemaVersion: 2
   })
-  assert.equal(await readFile(live, 'utf8'), bytes)
+  assert.equal(await readFile(archive, 'utf8'), bytes)
   await assert.rejects(readFile(backup), { code: 'ENOENT' })
   console.log(
-    'PASS: v1 startup/export normalize to v2 without rewriting live bytes, creating backup or changing revision/pricing/relationships'
+    'PASS: v1 startup/export normalize to v2 and archive exact source bytes without changing revision/pricing/relationships'
   )
 
   await page.getByRole('navigation').getByRole('button', { name: 'Data & portability' }).click()
@@ -125,24 +128,24 @@ try {
   const batch = JSON.stringify({ schemaVersion: 2, revision: 999, runs: [importedRun] })
   await page.getByLabel('Dataset JSON').fill(batch)
   await button('Validate & preview').click()
-  assert.equal(await readFile(live, 'utf8'), bytes)
+  assert.equal(await readFile(archive, 'utf8'), bytes)
   await button('Import records').click()
   await page.getByRole('status').filter({ hasText: 'Import saved' }).waitFor()
   const imported = await load()
   assert.equal(imported.schemaVersion, 2)
   assert.equal(imported.revision, 8)
   assert.deepEqual(imported.runs[1], importedRun)
-  assert.equal(await readFile(backup, 'utf8'), bytes)
-  assert.deepEqual(await readFile(backup), Buffer.from(bytes, 'utf8'))
+  assert.equal(await readFile(archive, 'utf8'), bytes)
+  assert.deepEqual(await readFile(archive), Buffer.from(bytes, 'utf8'))
   assert.equal(imported.runs[1].usageBurn, undefined)
   assert.equal(imported.runs[1].usageBefore, undefined)
   assert.equal(imported.runs[1].usageAfter, undefined)
   console.log(
-    'PASS: actual UI preview/import persists strict evidence and cached/fresh token semantics, leaves operator meter unknown, backs up original v1 bytes'
+    'PASS: actual UI preview/import persists strict evidence and cached/fresh token semantics, leaves operator meter unknown, preserves archived v1 bytes'
   )
 
-  const persisted = await readFile(live, 'utf8')
-  const backupBytes = await readFile(backup, 'utf8')
+  const persisted = await canonicalSnapshot(directory)
+  const backupBytes = await readFile(archive, 'utf8')
   for (const badEvidence of [
     { ...evidence, peakInvocation: { inputTokens: 300000, contextWindowTokens: 200000 } },
     { ...evidence, toolOutput: 'rejected synthetic payload' },
@@ -175,8 +178,8 @@ try {
         })
       )
     )
-    assert.equal(await readFile(live, 'utf8'), persisted)
-    assert.equal(await readFile(backup, 'utf8'), backupBytes)
+    assert.equal(await canonicalSnapshot(directory), persisted)
+    assert.equal(await readFile(archive, 'utf8'), backupBytes)
     assert.deepEqual(await load(), imported)
   }
   console.log(
@@ -193,7 +196,7 @@ try {
   await editor.fill(JSON.stringify({ ...evidence, prompt: 'rejected synthetic payload' }))
   await button('Save run').click()
   await page.getByRole('alert').filter({ hasText: 'unknown field' }).waitFor()
-  assert.equal(await readFile(live, 'utf8'), persisted)
+  assert.equal(await canonicalSnapshot(directory), persisted)
   await editor.fill(
     JSON.stringify({
       ...evidence,
@@ -203,7 +206,7 @@ try {
   await button('Save run').click()
   await page.getByRole('alert').filter({ hasText: 'exceeds paired context window' }).waitFor()
   assert.equal(JSON.parse(await editor.inputValue()).peakInvocation.inputTokens, 300000)
-  assert.equal(await readFile(live, 'utf8'), persisted)
+  assert.equal(await canonicalSnapshot(directory), persisted)
   const corrected = { ...evidence, toolCallCount: 0 }
   await editor.fill(JSON.stringify(corrected, null, 2))
   await captureElectron(application, page, { path: join(directory, 'evidence-editor.png') })
@@ -244,7 +247,7 @@ try {
   application = undefined
   await launch(directory)
   assert.deepEqual(await load(), saved)
-  assert.deepEqual(JSON.parse(await readFile(live, 'utf8')), saved)
+  assert.deepEqual(await canonicalDataset(directory), saved)
   await application.close()
   application = undefined
   console.log(

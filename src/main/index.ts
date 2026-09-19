@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { join, resolve } from 'node:path'
 import { readFile, stat } from 'node:fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { TelemetryStore } from './store'
+import { ProductionStore } from './production-store'
 import { writeExport } from './export'
 import { randomUUID } from 'node:crypto'
 import { discoverBatch } from './batch-import'
@@ -20,7 +20,16 @@ if (!locked) app.quit()
 else {
   app.whenReady().then(() => {
     electronApp.setAppUserModelId('com.pennyos.pennytel')
-    const store = new TelemetryStore(app.getPath('userData'))
+    const store = new ProductionStore(app.getPath('userData'))
+    let storageClosed = false
+    app.on('before-quit', (event) => {
+      if (storageClosed) return
+      event.preventDefault()
+      void store.close().finally(() => {
+        storageClosed = true
+        app.quit()
+      })
+    })
     const mainWindow = new BrowserWindow({
       title: 'PennyTel',
       width: 1440,
@@ -141,10 +150,7 @@ else {
         filters: [{ name: 'JSON', extensions: ['json'] }]
       })
       if (result.canceled || !result.filePath) return null
-      await writeExport(result.filePath, contents, [
-        store.path,
-        join(app.getPath('userData'), 'telemetry.backup.json')
-      ])
+      await writeExport(result.filePath, contents, store.protectedPaths, store.protectedDirectories)
       return result.filePath
     }
     mainWindow.on('ready-to-show', () => mainWindow.show())

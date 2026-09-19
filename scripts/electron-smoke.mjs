@@ -1,5 +1,6 @@
 // All generated telemetry is synthetic QA data in an isolated directory.
 import { _electron as electron } from 'playwright'
+import { canonicalDataset } from './canonical-qa.mjs'
 import { captureElectron } from './electron-qa-capture.mjs'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
@@ -459,7 +460,7 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
   await captureElectron(app, page, { path: join(directory, '04-narrow.png') })
   assert.deepEqual(failures, [])
-  const persisted = JSON.parse(await readFile(join(directory, 'telemetry.json'), 'utf8'))
+  const persisted = await canonicalDataset(directory)
   assert.equal(persisted.slices.length, 3)
   assert.equal(persisted.findings[0].repairRunId, 'qa-repair')
   assert.equal(persisted.discoveries[0].validation, 'Yes')

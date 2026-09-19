@@ -1,5 +1,5 @@
 import { lstat, open, realpath, rename, unlink } from 'node:fs/promises'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 async function entry(path: string): Promise<Awaited<ReturnType<typeof lstat>> | undefined> {
@@ -16,17 +16,26 @@ async function entry(path: string): Promise<Awaited<ReturnType<typeof lstat>> | 
 export async function writeExport(
   destination: string,
   contents: unknown,
-  protectedPaths: string[]
+  protectedPaths: string[],
+  protectedDirectories: string[] = []
 ): Promise<void> {
   const target = join(await realpath(dirname(resolve(destination))), basename(destination))
   const assertSafe = async (): Promise<void> => {
     const candidate = await entry(target)
-    if (candidate && (!candidate.isFile() || !candidate.ino))
+    if (candidate && (!candidate.isFile() || !candidate.ino || candidate.nlink !== 1))
       throw new Error('Export destination safety cannot be determined. Choose a regular file path.')
+    for (const directory of protectedDirectories) {
+      const canonical = join(await realpath(dirname(directory)), basename(directory))
+      const stat = await entry(canonical)
+      if (stat && (!stat.isDirectory() || stat.isSymbolicLink()))
+        throw new Error('Cannot determine storage directory identity; export blocked.')
+      if (target === canonical || target.startsWith(`${canonical}${sep}`))
+        throw new Error('Choose a path outside PennyTel storage and recovery evidence.')
+    }
     for (const path of protectedPaths) {
       const canonical = join(await realpath(dirname(path)), basename(path))
       if (target === canonical)
-        throw new Error('Choose a path outside the live dataset and its backup.')
+        throw new Error('Choose a path outside PennyTel storage and recovery evidence.')
       const protectedEntry = await entry(canonical)
       if (!protectedEntry) continue
       // Resolve protected links too; broken/inaccessible links fail closed.
@@ -34,7 +43,7 @@ export async function writeExport(
       if (!identity?.isFile() || !identity.ino)
         throw new Error('Cannot determine live dataset or backup identity; export blocked.')
       if (candidate && candidate.dev === identity.dev && candidate.ino === identity.ino)
-        throw new Error('Choose a path outside the live dataset and its backup.')
+        throw new Error('Choose a path outside PennyTel storage and recovery evidence.')
     }
   }
   await assertSafe()

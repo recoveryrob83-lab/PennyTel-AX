@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { captureElectron } from './electron-qa-capture.mjs'
+import { canonicalSnapshot } from './canonical-qa.mjs'
 
 export async function verifyEvidenceAnalysis(application, page, directory) {
   const button = (name) => page.getByRole('button', { name, exact: true })
@@ -65,9 +66,7 @@ export async function verifyEvidenceAnalysis(application, page, directory) {
   await page.getByRole('status').filter({ hasText: 'Import saved' }).waitFor()
   const data = await load()
   assert.equal(data.runs.length, 6)
-  const live = join(directory, 'telemetry.json')
-  const before = await readFile(live, 'utf8')
-  const backupBefore = await readFile(join(directory, 'telemetry.backup.json'), 'utf8')
+  const before = await canonicalSnapshot(directory)
 
   await navigate('Slice notebook')
   await page.getByRole('button').filter({ hasText: 'Synthetic evidence slice' }).click()
@@ -241,8 +240,7 @@ export async function verifyEvidenceAnalysis(application, page, directory) {
       page.evaluate((text) => window.pennytel.previewImport(text), JSON.stringify(artifact)),
       /derived analysis/
     )
-  assert.equal(await readFile(live, 'utf8'), before)
-  assert.equal(await readFile(join(directory, 'telemetry.backup.json'), 'utf8'), backupBefore)
+  assert.equal(await canonicalSnapshot(directory), before)
   const rawPath = join(directory, 'evidence-analysis-raw.json')
   await saveDialog(rawPath)
   assert.equal(await page.evaluate(() => window.pennytel.exportData()), rawPath)

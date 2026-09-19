@@ -391,8 +391,21 @@ export class CanonicalArtifactStore {
     return { bytes, artifact }
   }
 
-  private async loadCanonicalInternal(): Promise<Dataset | undefined> {
-    await this.ensureLayout()
+  private async inspectLayout(): Promise<boolean> {
+    const parent = await lstat(dirname(this.root))
+    if (!parent.isDirectory() || parent.isSymbolicLink())
+      throw new Error('Canonical artifact parent directory is unsafe.')
+    const root = await this.entry(this.root)
+    if (!root) return false
+    if (!root.isDirectory() || root.isSymbolicLink())
+      throw new Error(`Canonical artifact storage directory is unsafe: ${this.root}`)
+    return true
+  }
+
+  private async loadCanonicalInternal(readOnly = false): Promise<Dataset | undefined> {
+    if (readOnly) {
+      if (!(await this.inspectLayout())) return undefined
+    } else await this.ensureLayout()
     const artifactNames = (await this.listRootFiles()).filter((name) =>
       name.startsWith('artifact-')
     )
@@ -457,6 +470,69 @@ export class CanonicalArtifactStore {
 
   loadCanonical(): Promise<Dataset | undefined> {
     return this.enqueue(async () => this.loadCanonicalInternal())
+  }
+
+  /** Read-only admission before S11 permits recovery to clean work, publish, or
+   * reconcile SQLite. A migrating source may coexist only with its own initial
+   * publication; normal post-cutover recovery remains governed by S10. */
+  inspectStartup(
+    migrationSource?: Dataset
+  ): Promise<{ hasEvidence: boolean; hasCanonical: boolean }> {
+    return this.enqueue(async () => {
+      if (!(await this.inspectLayout())) return { hasEvidence: false, hasCanonical: false }
+      const names = await this.listRootFiles()
+      const receipt = await this.readReceipt()
+      if (receipt && migrationSource) {
+        const expected = this.newArtifactMap(migrationSource)
+        if (
+          receipt.baseRevision !== null ||
+          receipt.targetRevision !== migrationSource.revision ||
+          receipt.targetDatasetSha256 !== datasetDigest(migrationSource) ||
+          receipt.operations.length !== expected.size ||
+          receipt.operations.some((operation) => {
+            const bytes = expected.get(operationTarget(operation))
+            return (
+              operation.kind !== 'put' ||
+              operation.expectedSha256 !== null ||
+              !bytes ||
+              operation.desiredSha256 !== sha256(bytes)
+            )
+          }) ||
+          names.some((name) => name.startsWith('artifact-') && !expected.has(name))
+        )
+          throw new Error(
+            'Canonical state contradicts the legacy migration source; files preserved.'
+          )
+        await this.assertWorkMatches(receipt)
+        // Check every partial publication target before allowing any recovery
+        // operation to mutate evidence. S10 still performs publication itself.
+        for (const operation of receipt.operations) {
+          if (operation.kind !== 'put') throw new Error('Migration cannot contain deletes.')
+          const target = await this.hashAt(operationTarget(operation))
+          const staged = await this.hashAt(stagePath(operation.stagedFile))
+          if (
+            (target !== undefined && target !== operation.desiredSha256) ||
+            (staged !== undefined && staged !== operation.desiredSha256) ||
+            (target === undefined && staged === undefined) ||
+            (receipt.state === 'prepared' && target !== undefined) ||
+            (receipt.state === 'published' && target === undefined)
+          )
+            throw new Error(
+              'Canonical state contradicts the legacy migration source; files preserved.'
+            )
+        }
+      }
+      let hasCanonical = receipt !== undefined && receipt.state !== 'prepared'
+      if (!hasCanonical) {
+        const current = await this.loadCanonicalInternal(true)
+        if (migrationSource && current && !isDeepStrictEqual(current, migrationSource))
+          throw new Error(
+            'Canonical state contradicts the legacy migration source; files preserved.'
+          )
+        hasCanonical = current !== undefined
+      }
+      return { hasEvidence: names.length > 0, hasCanonical }
+    })
   }
 
   private enqueue<T>(action: () => Promise<T>): Promise<T> {

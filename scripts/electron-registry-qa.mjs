@@ -1,5 +1,6 @@
 // Real Electron registry QA. Optional source profile is read only and copied into this repo.
 import { _electron as electron } from 'playwright'
+import { canonicalSnapshot } from './canonical-qa.mjs'
 import { captureElectron } from './electron-qa-capture.mjs'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
@@ -142,7 +143,7 @@ try {
     assert.equal(r.priceSnapshot.inputRate, r.model === 'GPT-6 Astra' ? 10 : 0.2)
   }
   assert.deepEqual(
-    JSON.parse(await readFile(join(directory, 'telemetry.backup.json'), 'utf8')),
+    JSON.parse(await readFile(join(directory, 'telemetry.legacy-archive.json'), 'utf8')),
     original
   )
   if (!sourceProfile) {
@@ -178,8 +179,8 @@ try {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, invalidPath)
   await button('Choose registry JSON').click()
-  const liveBefore = await readFile(join(directory, 'telemetry.json'), 'utf8')
-  const backupBefore = await readFile(join(directory, 'telemetry.backup.json'), 'utf8')
+  const liveBefore = await canonicalSnapshot(directory)
+  const backupBefore = await readFile(join(directory, 'telemetry.legacy-archive.json'), 'utf8')
   await button('Validate registry & preview').click()
   await page
     .getByRole('alert')
@@ -199,8 +200,11 @@ try {
     { text: JSON.stringify(invalid), revision: initial.revision }
   )
   assert.match(invalidResult, /unknown maker reference/)
-  assert.equal(await readFile(join(directory, 'telemetry.json'), 'utf8'), liveBefore)
-  assert.equal(await readFile(join(directory, 'telemetry.backup.json'), 'utf8'), backupBefore)
+  assert.equal(await canonicalSnapshot(directory), liveBefore)
+  assert.equal(
+    await readFile(join(directory, 'telemetry.legacy-archive.json'), 'utf8'),
+    backupBefore
+  )
   await captureElectron(app, page, { path: join(directory, 'invalid-registry.png') })
   console.log(
     'PASS: file selection, useful UI rejection and independent main-process validation; invalid update leaves live/backup bytes unchanged'

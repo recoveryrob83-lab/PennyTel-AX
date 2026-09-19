@@ -396,14 +396,20 @@ try {
   }, rawPath)
   await page.evaluate(() => window.pennytel.exportData())
   assert.deepEqual(JSON.parse(await readFile(rawPath, 'utf8')), { ...data, schemaVersion: 2 })
-  assert.equal(await readFile(join(directory, 'telemetry.json'), 'utf8'), originalBytes)
+  assert.equal(
+    await readFile(join(directory, 'telemetry.legacy-archive.json'), 'utf8'),
+    originalBytes
+  )
   await app.close()
   await launch()
   assert.deepEqual((await page.evaluate(() => window.pennytel.load())).data, {
     ...data,
     schemaVersion: 2
   })
-  assert.equal(await readFile(join(directory, 'telemetry.json'), 'utf8'), originalBytes)
+  assert.equal(
+    await readFile(join(directory, 'telemetry.legacy-archive.json'), 'utf8'),
+    originalBytes
+  )
   await page.getByRole('navigation').getByRole('button', { name: 'Compare', exact: true }).click()
   assert.equal(await page.getByRole('checkbox', { checked: true }).count(), 0)
   assert.deepEqual(errors, [])

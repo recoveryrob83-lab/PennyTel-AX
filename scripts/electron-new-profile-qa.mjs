@@ -4,7 +4,8 @@
 import { _electron as electron } from 'playwright'
 import { captureElectron } from './electron-qa-capture.mjs'
 import assert from 'node:assert/strict'
-import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, writeFile } from 'node:fs/promises'
+import { canonicalDataset } from './canonical-qa.mjs'
 import { join, resolve } from 'node:path'
 
 await mkdir(resolve('test-results'), { recursive: true })
@@ -78,13 +79,15 @@ try {
     .filter({ hasText: /changed outside PennyTel/ })
     .waitFor()
   assert.ok(await page.getByRole('dialog').isVisible())
-  assert.equal((await page.evaluate(() => window.pennytel.load())).data.revision, 1)
+  assert.equal((await canonicalDataset(directory)).revision, 1)
   assert.equal(await readFile(live, 'utf8'), liveBytes)
   assert.equal(await readFile(backup, 'utf8'), backupBytes)
   await captureElectron(app, page, { path: join(directory, 'rejected-save.png') })
   await app.close()
-  // Operator restores recovery data while the application is closed.
-  await copyFile(backup, live)
+  // Stray legacy files cannot be promoted after canonical cutover. Preserve the
+  // external evidence elsewhere while closed, then reopen canonical authority.
+  await rename(live, join(directory, 'preserved-stray-live.json'))
+  await rename(backup, join(directory, 'preserved-stray-backup.json'))
   app = await electron.launch({
     args: [
       '--disable-backgrounding-occluded-windows',
@@ -113,8 +116,13 @@ try {
     })
   )
   assert.equal(saved.data.revision, 2)
-  assert.ok(saved.data.slices.some((slice) => slice.id === 'recovery-only'))
-  assert.deepEqual(JSON.parse(await readFile(backup, 'utf8')), JSON.parse(backupBytes))
+  assert.ok(!saved.data.slices.some((slice) => slice.id === 'recovery-only'))
+  assert.deepEqual(
+    JSON.parse(await readFile(join(directory, 'preserved-stray-backup.json'), 'utf8')),
+    JSON.parse(backupBytes)
+  )
+  await assert.rejects(readFile(live), { code: 'ENOENT' })
+  await assert.rejects(readFile(backup), { code: 'ENOENT' })
   console.log(
     `PASS: IPC rejection, UI error without false success, byte preservation, recovery survival, and restored restart. Artifacts: ${directory}`
   )

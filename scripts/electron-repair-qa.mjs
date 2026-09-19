@@ -2,7 +2,8 @@
 import { _electron as electron } from 'playwright'
 import { captureElectron } from './electron-qa-capture.mjs'
 import assert from 'node:assert/strict'
-import { copyFile, link, mkdir, mkdtemp, readFile, rename, symlink } from 'node:fs/promises'
+import { copyFile, link, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
+import { canonicalDataset } from './canonical-qa.mjs'
 import { join, resolve } from 'node:path'
 
 await mkdir(resolve('test-results'), { recursive: true })
@@ -39,7 +40,7 @@ const save = async () => {
   await button('Save slice').click()
   await page.getByRole('dialog').waitFor({ state: 'hidden' })
 }
-const dataset = async () => JSON.parse(await readFile(join(directory, 'telemetry.json'), 'utf8'))
+const dataset = async () => canonicalDataset(env.PENNYTEL_DATA_DIR)
 try {
   await launch()
   await button('+ New slice').click()
@@ -110,7 +111,8 @@ try {
     'PASS: local summer/winter editing, DST gap/overlap rejection, exact correction, Accept now, explicit clearing, history/judgment preservation and restart'
   )
 
-  const paths = ['telemetry.json', 'telemetry.backup.json'].map((name) => join(directory, name))
+  const canonicalRoot = join(directory, 'canonical-artifact-store')
+  const paths = [join(canonicalRoot, 'artifact-dataset.json')]
   const originals = await Promise.all(paths.map((path) => readFile(path, 'utf8')))
   async function exportTo(filePath, kind) {
     await app.evaluate(({ dialog }, destination) => {
@@ -139,13 +141,17 @@ try {
     const parent = join(directory, `parent-${index}`)
     await symlink(protectedPath, symbolic)
     await link(protectedPath, hard)
-    await symlink(directory, parent, 'dir')
+    await symlink(canonicalRoot, parent, 'dir')
     for (const kind of ['raw', 'comparison']) {
       for (const destination of [
         protectedPath,
         symbolic,
         hard,
-        join(parent, index ? 'telemetry.backup.json' : 'telemetry.json')
+        join(parent, 'artifact-dataset.json'),
+        join(directory, 'telemetry.json'),
+        join(directory, 'pennytel-projection.sqlite'),
+        join(directory, 'pennytel-projection.sqlite-wal'),
+        join(canonicalRoot, 'transaction-pending.json')
       ]) {
         assert.ok((await exportTo(destination, kind)).error, `${kind}: must reject ${destination}`)
         assert.deepEqual(await Promise.all(paths.map((path) => readFile(path, 'utf8'))), originals)
@@ -170,17 +176,20 @@ try {
   })
   assert.deepEqual(security, { sandbox: true, contextIsolation: true, nodeIntegration: false })
   console.log(
-    'PASS: raw/comparison reject direct, symlink, hard-link and parent-directory aliases of live/backup; regular exports and sandbox preserved'
+    'PASS: raw/comparison reject canonical aliases, projection, pending and retired live paths; regular exports and sandbox preserved'
   )
 
+  const backupBefore = JSON.stringify(await dataset(), null, 2)
   await app.close()
-  // Preserve all QA evidence while creating a backup-only recovery scenario.
-  await rename(paths[0], join(directory, 'preserved-live.json'))
-  const backupBefore = await readFile(paths[1], 'utf8')
+  // Backup-only legacy recovery must be tested before canonical cutover.
+  const recoveryDirectory = await mkdtemp(join(directory, 'legacy-recovery-'))
+  const recoveryBackup = join(recoveryDirectory, 'telemetry.backup.json')
+  await writeFile(recoveryBackup, backupBefore)
+  env.PENNYTEL_DATA_DIR = recoveryDirectory
   await launch()
   await page
     .getByRole('alert')
-    .filter({ hasText: /Recovery state/ })
+    .filter({ hasText: /Backup-only legacy recovery state/ })
     .waitFor()
   assert.equal(await button('+ New slice').count(), 0)
   const rejection = await page.evaluate(async () => {
@@ -200,19 +209,22 @@ try {
   await button('Retry load').click()
   await page
     .getByRole('alert')
-    .filter({ hasText: /Recovery state/ })
+    .filter({ hasText: /Backup-only legacy recovery state/ })
     .waitFor()
-  assert.equal(await readFile(paths[1], 'utf8'), backupBefore)
+  assert.equal(await readFile(recoveryBackup, 'utf8'), backupBefore)
   await captureElectron(app, page, { path: join(directory, 'backup-only.png') })
   await app.close()
-  await copyFile(paths[1], join(directory, 'preserved-recovery.json'))
-  await copyFile(paths[1], paths[0])
+  await copyFile(recoveryBackup, join(directory, 'preserved-recovery.json'))
+  await copyFile(recoveryBackup, join(recoveryDirectory, 'telemetry.json'))
   await launch()
   await page.getByRole('button', { name: /Repair QA acceptance/ }).click()
   await button('Edit slice').click()
   await page.getByLabel('Title', { exact: false }).fill('Recovered QA record')
   await save()
-  assert.equal(await readFile(paths[1], 'utf8'), JSON.stringify(JSON.parse(backupBefore), null, 2))
+  assert.equal(
+    await readFile(join(recoveryDirectory, 'telemetry.backup.legacy-archive.json'), 'utf8'),
+    backupBefore
+  )
   console.log(
     'PASS: backup-only startup, IPC write refusal, retry preservation, manual recovery and subsequent save'
   )

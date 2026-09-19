@@ -84,9 +84,10 @@ export function Data({
           </span>
         </div>
         <p className="footnote">
-          Every successful change is saved to disk. The previous revision is retained as
-          telemetry.backup.json alongside the live dataset. Export periodically for a separate
-          backup. If a file is corrupt, PennyTel preserves it and stops writes.
+          Every successful change is saved to canonical JSON artifacts in this local folder.
+          Migrated legacy files are preserved separately as archive evidence. Export periodically
+          for a separate backup. If canonical data is corrupt, PennyTel preserves it and stops
+          writes.
         </p>
       </section>
       <section className="panel">

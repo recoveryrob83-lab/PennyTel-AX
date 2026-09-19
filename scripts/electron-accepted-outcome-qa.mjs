@@ -184,7 +184,7 @@ try {
   }, rawPath)
   await page.evaluate(() => window.pennytel.exportData())
   assert.deepEqual(JSON.parse(await readFile(rawPath, 'utf8')), data)
-  assert.equal(await readFile(join(directory, 'telemetry.json'), 'utf8'), bytes)
+  assert.equal(await readFile(join(directory, 'telemetry.legacy-archive.json'), 'utf8'), bytes)
   await app.close()
   await launch()
   assert.deepEqual((await page.evaluate(() => window.pennytel.load())).data, data)
