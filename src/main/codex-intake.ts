@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { lstat, open, readdir, realpath } from 'node:fs/promises'
+import { lstat, open, readdir, realpath, type FileHandle } from 'node:fs/promises'
 import { realpathSync, existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -28,6 +28,27 @@ const MAX_RECEIPT_BYTES = 4096
 const REPORTER_START = 'PENNYOS_TURN_REPORT_V1'
 const RECEIPT_NAME = /^pr1_[0-9]{8}T[0-9]{9}Z_[a-f0-9]{32}\.json$/
 const execFileAsync = promisify(execFile)
+
+interface ReadBudget {
+  bytes: number
+  lines: number
+}
+
+/** Charge the bytes the source actually returned, including classification and revalidation. */
+async function readRolloutBytes(
+  fd: FileHandle,
+  buffer: Buffer,
+  offset: number,
+  length: number,
+  position: number,
+  budget: ReadBudget
+): Promise<number> {
+  const remaining = MAX_TOTAL_BYTES - budget.bytes
+  if (remaining <= 0) throw new Error('Discovery exceeds the 128 MB read limit.')
+  const { bytesRead } = await fd.read(buffer, offset, Math.min(length, remaining), position)
+  budget.bytes += bytesRead
+  return bytesRead
+}
 
 /** Creation authority is limited to these exact index entries in this repository. */
 async function trackedSliceIdentity(root: string, sliceId: string): Promise<boolean> {
@@ -424,7 +445,7 @@ function validateRolloutName(name: string): void {
 }
 
 /** Read only the bounded opening record; Codex 0.155.1 puts session_meta first. */
-async function rolloutProducerTimestamp(file: string): Promise<number> {
+async function rolloutProducerTimestamp(file: string, budget: ReadBudget): Promise<number> {
   const before = await lstat(file)
   if (!before.isFile()) throw new Error('Codex rollout timestamp source is nonregular.')
   const fd = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
@@ -433,8 +454,15 @@ async function rolloutProducerTimestamp(file: string): Promise<number> {
       throw new Error('Codex rollout timestamp source changed during classification.')
     const buffer = Buffer.alloc(MAX_LINE_BYTES + 1)
     let length = 0
-    while (length < buffer.length) {
-      const { bytesRead } = await fd.read(buffer, length, buffer.length - length, length)
+    while (length < buffer.length && length < before.size) {
+      const bytesRead = await readRolloutBytes(
+        fd,
+        buffer,
+        length,
+        Math.min(buffer.length - length, before.size - length),
+        length,
+        budget
+      )
       if (!bytesRead) break
       length += bytesRead
       const newline = buffer.subarray(0, length).indexOf(10)
@@ -486,7 +514,8 @@ async function rolloutProducerTimestamp(file: string): Promise<number> {
 export async function rolloutPaths(
   home: string,
   window: DiscoveryWindow,
-  directories: Record<string, SourceStamp> = {}
+  directories: Record<string, SourceStamp> = {},
+  budget: ReadBudget = { bytes: 0, lines: 0 }
 ): Promise<string[]> {
   const paths: string[] = []
   let entriesSeen = 0
@@ -525,7 +554,7 @@ export async function rolloutPaths(
             `${rel[0]}-${rel[1]}-${rel[2]}` !== entry.name.slice(8, 18)
           )
             throw new Error('Codex rollout directory and filename dates disagree.')
-          const sourceTime = await rolloutProducerTimestamp(child)
+          const sourceTime = await rolloutProducerTimestamp(child, budget)
           if (sourceTime > window.now)
             throw new Error(
               'Codex rollout producer timestamp is in the future; discovery cannot classify it.'
@@ -643,7 +672,7 @@ export async function scanFile(
   receipts: Map<string, Receipt>,
   repo: string,
   reporter: Reporter,
-  budget: { bytes: number; lines: number }
+  budget: ReadBudget
 ): Promise<FileObservation> {
   if ((await realpath(file)) !== file) throw new Error('Rollout path uses a symlink.')
   const before = await lstat(file)
@@ -911,11 +940,10 @@ export async function scanFile(
     let pending = Buffer.alloc(0)
     while (readPosition < before.size) {
       const count = Math.min(chunk.length, before.size - readPosition)
-      const read = await fd.read(chunk, 0, count, readPosition)
-      if (!read.bytesRead) throw new Error('Rollout changed during discovery.')
-      readPosition += read.bytesRead
-      budget.bytes += read.bytesRead
-      const bytes = Buffer.concat([pending, chunk.subarray(0, read.bytesRead)])
+      const bytesRead = await readRolloutBytes(fd, chunk, 0, count, readPosition, budget)
+      if (!bytesRead) throw new Error('Rollout changed during discovery.')
+      readPosition += bytesRead
+      const bytes = Buffer.concat([pending, chunk.subarray(0, bytesRead)])
       let start = 0
       for (let i = 0; i < bytes.length; i++) {
         if (bytes[i] !== 10) continue
@@ -962,14 +990,10 @@ export async function scanFile(
     let position = 0
     while (position < opened.size) {
       const count = Math.min(chunk.length, opened.size - position)
-      if (budget.bytes + count > MAX_TOTAL_BYTES)
-        throw new Error('Discovery exceeds the 128 MB read limit.')
-      const read = await fd.read(chunk, 0, count, position)
-      if (!read.bytesRead)
-        throw new SourceChangedError('Codex closure evidence changed during capture.')
-      verified.update(chunk.subarray(0, read.bytesRead))
-      position += read.bytesRead
-      budget.bytes += read.bytesRead
+      const bytesRead = await readRolloutBytes(fd, chunk, 0, count, position, budget)
+      if (!bytesRead) throw new SourceChangedError('Codex closure evidence changed during capture.')
+      verified.update(chunk.subarray(0, bytesRead))
+      position += bytesRead
     }
     if (verified.digest('hex') !== digest)
       throw new SourceChangedError('Codex closure evidence changed during capture.')
@@ -1100,17 +1124,17 @@ export class CodexIntake {
     let uncertainties: string[] = []
     let inventory: string[] = []
     const directories: Record<string, SourceStamp> = {}
+    const budget: ReadBudget = { bytes: 0, lines: 0 }
     const files = async (captured: Record<string, SourceStamp>): Promise<string[]> => {
       const paths = this.testSources?.rolloutFiles
         ? [...this.testSources.rolloutFiles].sort()
-        : await rolloutPaths(this.codexHome, window, captured)
+        : await rolloutPaths(this.codexHome, window, captured, budget)
       if (paths.length > MAX_FILES)
         throw new Error('Relevant Codex rollout file count exceeds limit.')
       return paths
     }
     try {
       inventory = await files(directories)
-      const budget = { bytes: 0, lines: 0 }
       const all = new Map(receipts.map((receipt) => [receipt.report.receiptId, receipt]))
       for (const path of inventory) {
         try {

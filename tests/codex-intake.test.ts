@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { appendFileSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import {
   mkdtemp,
+  link,
   mkdir,
   readFile,
   rename,
@@ -379,6 +380,51 @@ describe('current Codex 0.155.1 closed-turn adapter', () => {
       }
       await writeFile(path, ' '.repeat(256_001))
       await expect(paths()).rejects.toThrow(/opening metadata exceeds the line limit/)
+    })
+  })
+
+  it('charges actual opening metadata, scan, and inventory revalidation bytes to one budget', async () => {
+    await inTemp(async (home) => {
+      const active = join(home, 'sessions')
+      await mkdir(active)
+      const path = join(active, 'rollout-2026-09-19T12-00-00-budget.jsonl')
+      const content = lines([
+        {
+          type: 'session_meta',
+          timestamp: '2026-09-19T12:00:00.000Z',
+          payload: { filler: 'x'.repeat(190_000) }
+        }
+      ])
+      await writeFile(path, content)
+      const size = Buffer.byteLength(content)
+      const window = {
+        horizon: 1 as const,
+        now: Date.parse('2026-09-19T13:00:00.000Z'),
+        cutoff: Date.parse('2026-09-18T13:00:00.000Z')
+      }
+      const budget = { bytes: 0, lines: 0 }
+      expect(await rolloutPaths(home, window, {}, budget)).toEqual([path])
+      expect(budget.bytes).toBe(size)
+      await scanFile(path, new Map(), '/synthetic', reporter, budget)
+      expect(budget.bytes).toBe(size * 3)
+      expect(await rolloutPaths(home, window, {}, budget)).toEqual([path])
+      expect(budget.bytes).toBe(size * 4)
+
+      const exhausted = { bytes: 128_000_000 - size + 1, lines: 0 }
+      await expect(rolloutPaths(home, window, {}, exhausted)).rejects.toThrow('128 MB')
+      expect(exhausted.bytes).toBe(128_000_000)
+
+      const shared = { bytes: 128_000_000 - size * 3 + 1, lines: 0 }
+      await rolloutPaths(home, window, {}, shared)
+      await expect(scanFile(path, new Map(), '/synthetic', reporter, shared)).rejects.toThrow(
+        '128 MB'
+      )
+      expect(shared.bytes).toBe(128_000_000)
+
+      const revalidation = { bytes: 128_000_000 - size, lines: 0 }
+      await rolloutPaths(home, window, {}, revalidation)
+      await expect(rolloutPaths(home, window, {}, revalidation)).rejects.toThrow('128 MB')
+      expect(revalidation.bytes).toBe(128_000_000)
     })
   })
 
@@ -948,6 +994,76 @@ async function authorityHarness(
 afterEach(() => vi.restoreAllMocks())
 
 describe('S15 selected authority window', () => {
+  async function addLargeOldRollouts(home: string): Promise<void> {
+    const archived = join(home, 'archived_sessions')
+    await mkdir(archived)
+    const original = join(archived, 'rollout-2020-01-01T00-00-00-old-000.jsonl')
+    await writeFile(
+      original,
+      lines([
+        {
+          type: 'session_meta',
+          timestamp: '2020-01-01T00:00:00.000Z',
+          payload: { filler: 'x'.repeat(254_900) }
+        }
+      ])
+    )
+    // Hard links keep the fixture small while every classified path still reads source bytes.
+    for (let i = 1; i < 510; i++)
+      await link(original, join(archived, `rollout-2020-01-01T00-00-00-old-${i}.jsonl`))
+  }
+
+  it('stops discovery during classification of many large old opening records', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir, { realInventory: true })
+      await addLargeOldRollouts(h.home)
+      const candidate = await h.discover()
+      expect(candidate.status).toBe('blocked')
+      expect(candidate.reason).toContain('128 MB read limit')
+      expect(candidate.token).toBeUndefined()
+      expect(h.writes).toHaveLength(0)
+    })
+  })
+
+  it('uses a fresh full budget at commit, then blocks newly excessive classification', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir, { realInventory: true })
+      const reviewed = await h.discover()
+      expect(reviewed.status).toBe('ready')
+      await addLargeOldRollouts(h.home)
+      await expect(h.intake.commit(reviewed.token!)).rejects.toThrow('128 MB read limit')
+      expect(h.writes).toHaveLength(0)
+    })
+  })
+
+  it('charges inventory revalidation after otherwise bounded classification and scans', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir, { realInventory: true })
+      const archived = join(h.home, 'archived_sessions')
+      await mkdir(archived)
+      const original = join(archived, 'rollout-2026-09-19T12-00-00-recheck-000.jsonl')
+      await writeFile(
+        original,
+        lines([
+          {
+            type: 'session_meta',
+            timestamp: '2026-09-19T12:00:00.000Z',
+            payload: { cwd: '/foreign', filler: 'x'.repeat(163_000) }
+          }
+        ])
+      )
+      // 198 metadata-only sources fit the 200-file bound. Their first three reads
+      // fit 128 MB; the inventory revalidation pass must cross it.
+      for (let i = 1; i < 198; i++)
+        await link(original, join(archived, `rollout-2026-09-19T12-00-00-recheck-${i}.jsonl`))
+      const candidate = await h.discover()
+      expect(candidate.status).toBe('blocked')
+      expect(candidate.reason).toContain('128 MB read limit')
+      expect(candidate.token).toBeUndefined()
+      expect(h.writes).toHaveLength(0)
+    })
+  })
+
   it('blocks review when an apparently old archive lacks producer time', async () => {
     await inTemp(async (dir) => {
       const h = await authorityHarness(dir, { realInventory: true })
