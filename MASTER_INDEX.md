@@ -23,6 +23,7 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - Accepted Slice 12 pennyReporter integration/adoption context map: [`docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md`](docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md)
 - Accepted Slice 13 Codex receipt-discovery/reviewed-import context map: [`docs/context-maps/Slice_13_Codex_Receipt_Discovery_Reviewed_Run_Import_Context_Map.md`](docs/context-maps/Slice_13_Codex_Receipt_Discovery_Reviewed_Run_Import_Context_Map.md)
 - Accepted Slice 14 operator-workflow/telemetry-UX closure context map: [`docs/context-maps/Slice_14_Operator_Workflow_Telemetry_UX_Closure_Context_Map.md`](docs/context-maps/Slice_14_Operator_Workflow_Telemetry_UX_Closure_Context_Map.md)
+- Active Slice 15 Codex discovery-horizon hotfix context map: [`docs/context-maps/Slice_15_Codex_Discovery_Horizon_Hotfix_Context_Map.md`](docs/context-maps/Slice_15_Codex_Discovery_Horizon_Hotfix_Context_Map.md)
 - S13 architecture escalation report: [`pennyos/worker-reports/S13/S13_Architecture_Escalation_01.md`](pennyos/worker-reports/S13/S13_Architecture_Escalation_01.md)
 - pennyReporter consumer contract and S13 handoff: [`docs/pennyreporter-integration.md`](docs/pennyreporter-integration.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
