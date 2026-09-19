@@ -1,14 +1,14 @@
 # S12 Context Map — pennyReporter Integration + Canonical Turn Receipt Adoption
 
-Issue: #26 — **S12 — pennypennyReporter Integration + Canonical Turn Receipt Adoption**
+Issue: #26 — **S12 — pennyReporter Integration + Canonical Turn Receipt Adoption**
 
 Prepared after S11 against PennyTel accepted baseline `e02a6a9fcfd1260fb73438eacfb68c6c730ba419`.
 
-S12 is a **consumer integration slice**. Canonical tool name is `pennyReporter`; **Penny Reporter** is the human-facing alias. `pennypennyReporter` implementation is external and owned by:
+S12 is a **consumer integration slice**. Canonical tool name is `pennyReporter`; **Penny Reporter** is the human-facing alias. `pennyReporter` implementation is external and owned by:
 
-- repository: `recoveryrob83-lab/PennyOS-pennyReporter`
+- repository: `recoveryrob83-lab/PennyOS-Reporter`
 - pennyReporter contract: that repository's Issue #1
-- expected local source repo: `/home/rob/dev/PennyOS-pennyReporter`
+- expected local source repo: `/home/rob/dev/PennyOS-Reporter`
 - expected installed command: `pennyReporter`
 
 Do not implement or vendor pennyReporter inside PennyTel.
@@ -19,7 +19,7 @@ Real operator layout:
 
 ```text
 /home/rob/dev/
-├── PennyOS-pennyReporter/
+├── PennyOS-Reporter/
 ├── PennyTel-AX/
 ├── PennyViz/
 ├── GunSmoke/
@@ -28,7 +28,7 @@ Real operator layout:
 
 pennyReporter and PennyTel are sibling repositories.
 
-`pennypennyReporter` executable/source belongs to PennyOS-pennyReporter.
+`pennyReporter` executable/source belongs to PennyOS-Reporter.
 
 PennyTel-owned identity/evidence remains inside PennyTel.
 
@@ -56,7 +56,7 @@ Current guidance already:
 Current limitation:
 - guidance assumes pennyReporter may be unavailable and every S9–S11 run used a waiver.
 
-S12 should update only the invocation/runtime details needed after `pennypennyReporter` v0.1 is installed:
+S12 should update only the invocation/runtime details needed after `pennyReporter` v0.1 is installed:
 
 - exact installed command;
 - target repo/slice arguments;
@@ -68,7 +68,7 @@ Do not duplicate pennyReporter protocol implementation details here.
 ## Git/runtime geography
 
 ### `.gitignore`
-PennyTel currently ignores build/test/log output but does not yet own a `pennypennyReporter` runtime ignore rule.
+PennyTel currently ignores build/test/log output but does not yet own a `pennyReporter` runtime ignore rule.
 
 S12 expected project-local runtime surface:
 
@@ -84,7 +84,7 @@ pennyReporter should create receipt directories/files; PennyTel should only esta
 ## PennyTel telemetry compatibility
 
 ### `src/shared/types.ts`
-`pennypennyReporter` v1 integration must remain compatible with current Run semantics:
+`pennyReporter` v1 integration must remain compatible with current Run semantics:
 
 - `sliceId`
 - `runType`
@@ -126,16 +126,16 @@ S13 will pair:
 
 - real Codex session/turn evidence;
 - final matching pennyReporter terminal block;
-- local matching `pennypennyReporter` receipt.
+- local matching `pennyReporter` receipt.
 
 ## Production storage boundary
 
 ### `src/main/production-store.ts`
 Canonical JSON artifacts remain PennyTel production telemetry authority.
 
-`pennypennyReporter` receipts are **not** PennyTel telemetry.
+`pennyReporter` receipts are **not** PennyTel telemetry.
 
-S12 must prove `pennypennyReporter` invocation does not mutate:
+S12 must prove `pennyReporter` invocation does not mutate:
 
 - ProductionStore;
 - canonical telemetry artifacts;
@@ -146,7 +146,7 @@ Receipt storage belongs only under PennyTel's ignored `.pennyos/runtime/receipts
 
 ## External pennyReporter seam to verify
 
-Once `pennypennyReporter` v0.1 is accepted/installed, inspect its documented CLI and supported validation/matching seam rather than guessing invocation syntax.
+Once `pennyReporter` v0.1 is accepted/installed, inspect its documented CLI and supported validation/matching seam rather than guessing invocation syntax.
 
 S12 should verify from PennyTel:
 
@@ -199,6 +199,4 @@ S13 owns:
 
 ## Start condition
 
-Do not dispatch PennyTel S12 implementation until `pennypennyReporter` Issue #1 is accepted and the CLI is installed locally.
-
-Until then, pennyReporter bootstrap/development runs require the explicit Chief Engineering waiver.
+Dependency cleared: pennyReporter Issue #1 is accepted/closed and the CLI is installed locally. PennyTel S12 may proceed.
