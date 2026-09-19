@@ -237,7 +237,9 @@ describe('comparison UI uses shared cohort context', () => {
       openImport: vi.fn(),
       exportData: vi.fn(),
       exportComparison,
-      runComparisonPlan: vi.fn()
+      runComparisonPlan: vi.fn(),
+      discoverCodexRuns: vi.fn(),
+      importCodexRun: vi.fn()
     }
     render(<Compare data={data} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
     expect(screen.getByLabelText('Group runs by')).toHaveValue('modelConfiguration')
@@ -287,7 +289,9 @@ describe('comparison UI uses shared cohort context', () => {
       openImport: vi.fn(),
       exportData: vi.fn(),
       exportComparison: vi.fn(),
-      runComparisonPlan: vi.fn()
+      runComparisonPlan: vi.fn(),
+      discoverCodexRuns: vi.fn(),
+      importCodexRun: vi.fn()
     }
     render(<App />)
     const nav = await screen.findByRole('navigation')
@@ -308,7 +312,9 @@ describe('comparison UI uses shared cohort context', () => {
       openImport: vi.fn(),
       exportData: vi.fn(),
       exportComparison,
-      runComparisonPlan: vi.fn()
+      runComparisonPlan: vi.fn(),
+      discoverCodexRuns: vi.fn(),
+      importCodexRun: vi.fn()
     }
     render(<Compare data={comparisonFixture()} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
     const accepted = within(
@@ -351,7 +357,9 @@ describe('comparison UI uses shared cohort context', () => {
       openImport: vi.fn(),
       exportData: vi.fn(),
       exportComparison: vi.fn().mockRejectedValue(new Error('Could not save analysis')),
-      runComparisonPlan: vi.fn()
+      runComparisonPlan: vi.fn(),
+      discoverCodexRuns: vi.fn(),
+      importCodexRun: vi.fn()
     }
     render(<Compare data={comparisonFixture()} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
     await user.click(screen.getByRole('button', { name: 'Export comparison' }))
@@ -371,7 +379,9 @@ describe('comparison UI uses shared cohort context', () => {
       openImport: vi.fn(),
       exportData: vi.fn(),
       exportComparison: vi.fn(),
-      runComparisonPlan
+      runComparisonPlan,
+      discoverCodexRuns: vi.fn(),
+      importCodexRun: vi.fn()
     }
     render(<Compare data={comparisonFixture()} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
     await user.click(screen.getByText('Narrow the cohort'))

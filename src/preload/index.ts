@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { PennyTelAPI } from '../shared/types'
 
 const api: PennyTelAPI = {
+  discoverCodexRuns: () => ipcRenderer.invoke('telemetry:discover-codex'),
+  importCodexRun: (token) => ipcRenderer.invoke('telemetry:import-codex', token),
   openBatchImport: () => ipcRenderer.invoke('telemetry:open-batch'),
   commitBatchImport: (token) => ipcRenderer.invoke('telemetry:commit-batch', token),
   load: () => ipcRenderer.invoke('telemetry:load'),

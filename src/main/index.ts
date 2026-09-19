@@ -11,6 +11,7 @@ import type { ImportSource, Mutation } from '../shared/types'
 import { comparisonExport, validateComparisonRequest } from '../shared/comparison'
 import { version as appVersion } from '../../package.json'
 import { runComparisonPlanOperation } from './comparison-plan'
+import { CodexIntake } from './codex-intake'
 
 // A dedicated directory keeps local QA separate from the operator's dataset.
 if (process.env.PENNYTEL_DATA_DIR) app.setPath('userData', resolve(process.env.PENNYTEL_DATA_DIR))
@@ -21,6 +22,10 @@ else {
   app.whenReady().then(() => {
     electronApp.setAppUserModelId('com.pennyos.pennytel')
     const store = new ProductionStore(app.getPath('userData'))
+    const codexIntake = new CodexIntake(
+      resolve(process.env.PENNYTEL_REPO_DIR || process.cwd()),
+      store
+    )
     let storageClosed = false
     app.on('before-quit', (event) => {
       if (storageClosed) return
@@ -57,6 +62,11 @@ else {
       })
     }
     let batch: { token: string; sources: ImportSource[]; revision: number } | undefined
+    handle('telemetry:discover-codex', () => codexIntake.discover())
+    handle('telemetry:import-codex', (token) => {
+      if (typeof token !== 'string') throw new Error('Invalid Codex import token.')
+      return codexIntake.commit(token)
+    })
     handle('telemetry:open-batch', async () => {
       batch = undefined
       const selected = await dialog.showOpenDialog(mainWindow, {

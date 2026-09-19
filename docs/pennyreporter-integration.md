@@ -20,3 +20,26 @@ For consumer validation, pennyReporter exposes `validateReceipt` and
 that matching receipt and terminal block with independently sourced session
 evidence; session discovery, turn matching, review, and PennyTel import remain
 outside this integration.
+
+## Codex intake (S13)
+
+Data & portability can discover project-local receipts and matching closed Codex
+turns. Start PennyTel from the project checkout, or set `PENNYTEL_REPO_DIR` to
+the checkout path. `CODEX_HOME` selects an explicit Codex home; otherwise intake
+uses the user's `.codex` directory. Only `sessions` and `archived_sessions`
+rollouts are searched. The installed `pennyReporter` v0.1.0 public package main
+validates receipts and final terminal blocks. It must be on `PATH` when
+discovery runs.
+
+Discovery is operator-triggered and read-only. It considers at most 100 receipts,
+200 relevant rollout files, 32 MB per rollout, 256 KB per line, 100,000 lines per
+file, and 128 MB per operation. Unsupported or changing sources block review
+with a bounded reason. Matching requires a Codex assistant `final_answer` and
+its explicit `task_complete`. Only normalized Run and execution evidence reach
+the renderer; no rollout content is persisted. Import consumes a preview token,
+rechecks the receipt, rollout closure and Dataset revision, and uses the ordinary
+Run save mutation.
+
+The deterministic fixture and Electron smoke cover Codex CLI `0.155.1`'s
+observed JSONL event shape. Unknown future authority fields or turn/usage
+semantics are not interpreted as telemetry.

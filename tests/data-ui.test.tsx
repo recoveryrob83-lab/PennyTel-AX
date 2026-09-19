@@ -4,8 +4,55 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
 import { Data } from '../src/renderer/src/pages/Data'
-import { emptyDataset, type PennyTelAPI } from '../src/shared/types'
+import { emptyDataset, type CodexIntakeCandidate, type PennyTelAPI } from '../src/shared/types'
 afterEach(cleanup)
+it('shows sanitized Codex review and imports only after the operator clicks', async () => {
+  const candidate: CodexIntakeCandidate = {
+    receiptId: 'pr1_test',
+    status: 'ready',
+    token: 'opaque-token',
+    report: {
+      sliceId: 'S13',
+      runType: 'Implementation',
+      role: 'Implementer',
+      result: 'Completed',
+      verification: 'Passed',
+      findings: 0
+    },
+    run: {
+      id: 'codex_pr1_test',
+      sliceId: 'S13',
+      runType: 'Implementation',
+      role: 'Implementer',
+      executionEvidence: { kind: 'codex-rollout', formatVersion: 1, turnId: 'turn-1' }
+    },
+    unknowns: ['inputTokens', 'outputTokens'],
+    warnings: ['Usage incomplete']
+  }
+  const discoverCodexRuns = vi.fn().mockResolvedValue([candidate])
+  const result = { data: { ...emptyDataset(), revision: 1 }, path: 'QA' }
+  const importCodexRun = vi.fn().mockResolvedValue(result)
+  window.pennytel = { discoverCodexRuns, importCodexRun } as unknown as PennyTelAPI
+  const onBatchImported = vi.fn()
+  render(
+    <Data
+      data={{ ...emptyDataset(), slices: [{ id: 'S13', title: 'Intake' }] }}
+      path="QA"
+      onImport={vi.fn()}
+      onBatchImported={onBatchImported}
+    />
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Discover Codex runs' }))
+  expect(await screen.findByText('pr1_test · ready')).toBeVisible()
+  expect(screen.getByText(/verification: Passed · findings: 0/)).toBeVisible()
+  expect(screen.getByText('Unknown: inputTokens, outputTokens')).toBeVisible()
+  expect(screen.getByText('Usage incomplete')).toBeVisible()
+  expect(screen.getByText(/"turnId": "turn-1"/)).toBeVisible()
+  expect(importCodexRun).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('button', { name: 'Import reviewed Run' }))
+  expect(importCodexRun).toHaveBeenCalledWith('opaque-token')
+  expect(onBatchImported).toHaveBeenCalledWith(result)
+})
 it('previews before committing, reports counts and keeps single import available', async () => {
   const result = { data: { ...emptyDataset(), revision: 1 }, path: 'QA' }
   const openBatchImport = vi.fn().mockResolvedValue({

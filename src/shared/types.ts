@@ -211,7 +211,27 @@ export interface BatchPreview extends ImportPreview {
   fileCount: number
   revision: number
 }
+export interface CodexIntakeCandidate {
+  receiptId: string
+  status: 'ready' | 'blocked' | 'already imported' | 'rejected'
+  reason?: string
+  token?: string
+  report?: {
+    sliceId: string
+    runType: string
+    role: Role
+    result: NonNullable<Run['result']>
+    verification: string
+    findings: number
+    candidate?: string
+  }
+  run?: Run
+  unknowns?: string[]
+  warnings?: string[]
+}
 export interface PennyTelAPI {
+  discoverCodexRuns: () => Promise<CodexIntakeCandidate[]>
+  importCodexRun: (token: string) => Promise<LoadedData>
   openBatchImport: () => Promise<BatchPreview | null>
   commitBatchImport: (token: string) => Promise<LoadedData>
   load: () => Promise<LoadedData>

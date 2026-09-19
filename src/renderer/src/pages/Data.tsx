@@ -4,6 +4,7 @@ import {
   TABLES,
   type Dataset,
   type BatchPreview,
+  type CodexIntakeCandidate,
   type LoadedData,
   type ImportPreview
 } from '../../../shared/types'
@@ -20,6 +21,7 @@ export function Data({
   onBatchImported: (result: LoadedData) => void
 }): React.JSX.Element {
   const [batch, setBatch] = useState<BatchPreview>()
+  const [codexCandidates, setCodexCandidates] = useState<CodexIntakeCandidate[]>()
   const [text, setText] = useState('')
   const [preview, setPreview] = useState<ImportPreview>()
   const [error, setError] = useState('')
@@ -234,6 +236,76 @@ export function Data({
             )}
           </div>
         )}
+      </section>
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <h2>Codex receipt intake</h2>
+            <p className="muted">
+              Discover project receipts and their closed Codex turns. Review the proposed Run before
+              importing it into this dataset.
+            </p>
+          </div>
+          <button
+            disabled={busy}
+            onClick={() =>
+              run(async () => {
+                setCodexCandidates(undefined)
+                setCodexCandidates(await window.pennytel.discoverCodexRuns())
+              })
+            }
+          >
+            Discover Codex runs
+          </button>
+        </div>
+        {codexCandidates &&
+          (codexCandidates.length ? (
+            codexCandidates.map((item) => (
+              <div className="import-preview" key={item.receiptId}>
+                <h3>
+                  {item.receiptId} · {item.status}
+                </h3>
+                {item.report && (
+                  <p>
+                    {item.report.sliceId} · {item.report.runType} · {item.report.role} ·{' '}
+                    {item.report.result}
+                    {' · '}verification: {item.report.verification} · findings:{' '}
+                    {item.report.findings}
+                    {item.report.candidate && <> · candidate: {item.report.candidate}</>}
+                  </p>
+                )}
+                {item.reason && <p role="alert">{item.reason}</p>}
+                {item.warnings?.map((warning) => (
+                  <p key={warning}>{warning}</p>
+                ))}
+                {item.unknowns?.length ? <p>Unknown: {item.unknowns.join(', ')}</p> : null}
+                {item.run && (
+                  <details open={item.status === 'ready'}>
+                    <summary>Proposed Run and normalized execution evidence</summary>
+                    <pre>{JSON.stringify(item.run, null, 2)}</pre>
+                  </details>
+                )}
+                {item.status === 'ready' && item.token && (
+                  <button
+                    className="primary"
+                    disabled={busy || !data.slices.some((slice) => slice.id === item.run?.sliceId)}
+                    onClick={() =>
+                      run(async () => {
+                        const result = await window.pennytel.importCodexRun(item.token!)
+                        onBatchImported(result)
+                        setCodexCandidates(undefined)
+                        setMessage(`Codex Run ${item.run!.id} imported.`)
+                      })
+                    }
+                  >
+                    Import reviewed Run
+                  </button>
+                )}
+              </div>
+            ))
+          ) : (
+            <p>No project-local receipts found.</p>
+          ))}
       </section>
       <section className="panel prose">
         <h2>Ingestion seam</h2>
