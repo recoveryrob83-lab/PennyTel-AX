@@ -67,7 +67,7 @@ and
 
 `archived_sessions/rollout-YYYY-MM-DDT...`
 
-Prefer the stable rollout filename/date structure for horizon classification.
+Use the bounded opening `session_meta.timestamp` from Codex 0.155.1 for horizon classification. It carries an explicit timezone; the filename clock is local wall time and remains structural identity only.
 
 The implementation should have one explicit parser/classifier for source timestamp identity rather than spreading date parsing through traversal code.
 
@@ -217,7 +217,7 @@ Add focused cases for:
 - exact cutoff boundary;
 - old files excluded before `MAX_FILES`;
 - 218+ historical files with <200 eligible recent files succeeds;
-- >200 eligible recent files blocks;
+- > 200 eligible recent files blocks;
 - active and archived layouts;
 - malformed/ambiguous rollout timestamps;
 - same horizon/cutoff bound through preview and commit;

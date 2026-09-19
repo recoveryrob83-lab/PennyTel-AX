@@ -403,8 +403,8 @@ export function installedReporter(): Reporter {
   }
   throw new Error('Installed pennyReporter was not found on PATH.')
 }
-/** Codex rollout names encode a UTC creation second; mtime is never discovery authority. */
-function rolloutTimestamp(name: string): number {
+/** The filename is structural identity only: Codex 0.155.1 writes a local wall clock here. */
+function validateRolloutName(name: string): void {
   const match =
     /^rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-([A-Za-z0-9_-]+)\.jsonl$/.exec(name)
   if (!match) throw new Error('Codex rollout filename has an unclassifiable timestamp.')
@@ -421,7 +421,67 @@ function rolloutTimestamp(name: string): number {
     date.getUTCSeconds() !== +second
   )
     throw new Error('Codex rollout filename has an invalid timestamp.')
-  return value
+}
+
+/** Read only the bounded opening record; Codex 0.155.1 puts session_meta first. */
+async function rolloutProducerTimestamp(file: string): Promise<number> {
+  const before = await lstat(file)
+  if (!before.isFile()) throw new Error('Codex rollout timestamp source is nonregular.')
+  const fd = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    if (!sameStamp(before, await fd.stat()))
+      throw new Error('Codex rollout timestamp source changed during classification.')
+    const buffer = Buffer.alloc(MAX_LINE_BYTES + 1)
+    let length = 0
+    while (length < buffer.length) {
+      const { bytesRead } = await fd.read(buffer, length, buffer.length - length, length)
+      if (!bytesRead) break
+      length += bytesRead
+      const newline = buffer.subarray(0, length).indexOf(10)
+      if (newline !== -1) {
+        length = newline
+        break
+      }
+    }
+    if (!length || length > MAX_LINE_BYTES)
+      throw new Error('Codex rollout opening metadata exceeds the line limit or is missing.')
+    let record: unknown
+    try {
+      record = JSON.parse(buffer.subarray(0, length).toString('utf8'))
+    } catch {
+      throw new Error('Codex rollout opening metadata is malformed.')
+    }
+    if (!object(record) || record.type !== 'session_meta' || !object(record.payload))
+      throw new Error('Codex rollout opening session metadata is missing.')
+    const value = record.timestamp
+    const match =
+      typeof value === 'string'
+        ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$/.exec(
+            value
+          )
+        : null
+    if (!match) throw new Error('Codex rollout producer timestamp needs an explicit timezone.')
+    const [, year, month, day, hour, minute, second, , zone, sign, offsetHour, offsetMinute] = match
+    const offset = zone === 'Z' ? 0 : (sign === '+' ? 1 : -1) * (+offsetHour * 60 + +offsetMinute)
+    const instant = Date.parse(value as string)
+    const local = new Date(instant + offset * 60_000)
+    if (
+      !Number.isFinite(instant) ||
+      (zone !== 'Z' && (+offsetHour > 23 || +offsetMinute > 59)) ||
+      local.getUTCFullYear() !== +year ||
+      local.getUTCMonth() + 1 !== +month ||
+      local.getUTCDate() !== +day ||
+      local.getUTCHours() !== +hour ||
+      local.getUTCMinutes() !== +minute ||
+      local.getUTCSeconds() !== +second
+    )
+      throw new Error('Codex rollout producer timestamp is invalid.')
+    if (!sameStamp(before, await fd.stat()))
+      throw new Error('Codex rollout timestamp source changed during classification.')
+    return instant
+  } finally {
+    await fd.close()
+  }
 }
 export async function rolloutPaths(
   home: string,
@@ -453,7 +513,7 @@ export async function rolloutPaths(
         if (entry.isDirectory()) await walk(child, depth + 1)
         else if (entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) {
           if (!entry.isFile()) throw new Error('Nonregular rollout source.')
-          const sourceTime = rolloutTimestamp(entry.name)
+          validateRolloutName(entry.name)
           // Dated active-session directories must agree with the source's own identity.
           const rel = relative(base, child).split(sep)
           if (
@@ -465,9 +525,10 @@ export async function rolloutPaths(
             `${rel[0]}-${rel[1]}-${rel[2]}` !== entry.name.slice(8, 18)
           )
             throw new Error('Codex rollout directory and filename dates disagree.')
+          const sourceTime = await rolloutProducerTimestamp(child)
           if (sourceTime > window.now)
             throw new Error(
-              'Codex rollout timestamp is in the future; discovery cannot classify it.'
+              'Codex rollout producer timestamp is in the future; discovery cannot classify it.'
             )
           if (sourceTime < window.cutoff) continue
           if (paths.length >= MAX_FILES)

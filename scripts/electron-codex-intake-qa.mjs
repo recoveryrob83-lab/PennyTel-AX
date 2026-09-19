@@ -1,6 +1,6 @@
 import { _electron as electron } from 'playwright'
 import assert from 'node:assert/strict'
-import { appendFile, copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 
@@ -11,8 +11,25 @@ const repo = join(root, 'repository')
 const home = join(root, 'codex-home')
 const profile = join(root, 'pennytel-profile')
 const now = new Date()
-const [year, month, day] = now.toISOString().slice(0, 10).split('-')
-const stamp = now.toISOString().slice(0, 19).replaceAll(':', '-')
+const localStamp = (date) => {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Chicago',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23'
+    })
+      .formatToParts(date)
+      .map(({ type, value }) => [type, value])
+  )
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}-${parts.minute}-${parts.second}`
+}
+const stamp = localStamp(now)
+const [year, month, day] = stamp.slice(0, 10).split('-')
 await mkdir(join(repo, 'pennyos', 'slices'), { recursive: true })
 await mkdir(join(repo, '.pennyos', 'runtime', 'receipts'), { recursive: true })
 await mkdir(join(home, 'sessions', year, month, day), { recursive: true })
@@ -33,11 +50,20 @@ await copyFile(
 )
 const rollout = (
   await readFile(resolve('tests/fixtures/codex-rollout-current-0.155.1.jsonl'), 'utf8')
-).replaceAll('/synthetic', repo)
+)
+  .replaceAll('/synthetic', repo)
+  .replace('2026-09-19T12:00:00.000Z', now.toISOString())
 const rolloutPath = join(home, 'sessions', year, month, day, `rollout-${stamp}-fixture.jsonl`)
 await writeFile(rolloutPath, rollout)
 for (let i = 0; i < 218; i++)
-  await writeFile(join(home, 'archived_sessions', `rollout-2020-01-01T00-00-00-old-${i}.jsonl`), '')
+  await writeFile(
+    join(home, 'archived_sessions', `rollout-2020-01-01T00-00-00-old-${i}.jsonl`),
+    JSON.stringify({
+      timestamp: '2020-01-01T00:00:00.000Z',
+      type: 'session_meta',
+      payload: { id: `old-${i}` }
+    }) + '\n'
+  )
 
 let application
 const env = {
@@ -145,6 +171,17 @@ try {
     { id: 'S13', title: 'Synthetic Codex intake QA', project: 'PennyTel' }
   ])
   assert.equal(parentOnly.runs.length, 0)
+  const duplicateTime = new Date(now.getTime() - 23 * 3_600_000)
+  const duplicatePath = join(
+    home,
+    'archived_sessions',
+    `rollout-${localStamp(duplicateTime)}-duplicate.jsonl`
+  )
+  await writeFile(duplicatePath, rollout.replace(now.toISOString(), duplicateTime.toISOString()))
+  await page.getByRole('button', { name: 'Discover Codex runs' }).click()
+  await page.getByRole('heading', { name: `${fixtureId} · blocked` }).waitFor()
+  await page.getByText(/Multiple terminal closures/).waitFor()
+  await rm(duplicatePath)
   await page.getByRole('button', { name: 'Discover Codex runs' }).click()
   await page.getByRole('heading', { name: `${fixtureId} · ready` }).waitFor()
   await page.getByText(/Unknown: executionEvidence\.sourceLog\.contentHash/).waitFor()

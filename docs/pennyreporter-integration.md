@@ -31,7 +31,7 @@ rollouts are searched. The installed `pennyReporter` v0.1.0 public package main
 validates receipts and final terminal blocks. It must be on `PATH` when
 discovery runs.
 
-Discovery is operator-triggered and read-only. The operator selects a rolling last 1, 3, or 5 days (default 1 day). UTC rollout filename timestamps define which sources enter the reviewed authority domain; older history does not count against the 200-file bound. The selected cutoff is fixed for review and commit. Unclassifiable timestamps block discovery. It considers at most 100 receipts,
+Discovery is operator-triggered and read-only. The operator selects a rolling last 1, 3, or 5 days (default 1 day). The timezone-aware producer timestamp on each rollout's opening `session_meta` record defines which sources enter the reviewed authority domain; older history does not count against the 200-file bound. The filename identifies a source but its timezone-free clock does not decide age. The selected cutoff is fixed for review and commit. Missing, malformed, or unclassifiable producer timestamps block discovery. It considers at most 100 receipts,
 200 rollout files inside the selected window, 32 MB per rollout, 256 KB per line, 100,000 lines per
 file, and 128 MB per operation. Unsupported or changing sources block review
 with a bounded reason. Matching requires a Codex assistant `final_answer` and

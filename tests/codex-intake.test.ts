@@ -222,7 +222,7 @@ describe('current Codex 0.155.1 closed-turn adapter', () => {
     expect(paths.some((path) => path.includes('/archived_sessions/'))).toBe(true)
   })
 
-  it('classifies rolling 1/3/5-day UTC boundaries before the 200-file bound', async () => {
+  it('classifies rolling 1/3/5-day producer boundaries before the 200-file bound', async () => {
     await inTemp(async (home) => {
       const active = join(home, 'sessions')
       const archive = join(home, 'archived_sessions')
@@ -230,7 +230,16 @@ describe('current Codex 0.155.1 closed-turn adapter', () => {
       await mkdir(archive)
       const now = Date.parse('2026-09-19T12:00:00.000Z')
       const add = async (root: string, date: string, suffix: string): Promise<void> => {
-        await writeFile(join(root, `rollout-${date}-${suffix}.jsonl`), '')
+        await writeFile(
+          join(root, `rollout-${date}-${suffix}.jsonl`),
+          lines([
+            {
+              type: 'session_meta',
+              timestamp: `${date.slice(0, 10)}T${date.slice(11).replaceAll('-', ':')}.000Z`,
+              payload: { id: suffix }
+            }
+          ])
+        )
       }
       await add(active, '2026-09-18T12-00-00', 'one-boundary')
       await add(archive, '2026-09-16T12-00-00', 'three-boundary')
@@ -259,7 +268,10 @@ describe('current Codex 0.155.1 closed-turn adapter', () => {
       const paths = (): Promise<string[]> =>
         rolloutPaths(home, { horizon: 1, now, cutoff: now - 86_400_000 })
       const path = join(active, 'rollout-2026-09-19T12-00-00-valid.jsonl')
-      await writeFile(path, '')
+      await writeFile(
+        path,
+        lines([{ type: 'session_meta', timestamp: '2026-09-19T12:00:00.000Z', payload: {} }])
+      )
       expect(await paths()).toEqual([path])
       for (const name of [
         'rollout-unknown.jsonl',
@@ -268,10 +280,105 @@ describe('current Codex 0.155.1 closed-turn adapter', () => {
         'rollout-2026-09-20T12-00-00-future.jsonl'
       ]) {
         const bad = join(active, name)
-        await writeFile(bad, '')
+        await writeFile(
+          bad,
+          lines([{ type: 'session_meta', timestamp: '2026-09-19T12:00:00.000Z', payload: {} }])
+        )
         await expect(paths()).rejects.toThrow(/timestamp|dates disagree/)
         await rm(bad)
       }
+    })
+  })
+
+  it('uses the opening producer timestamp across local filename clocks, DST, and machine timezones', async () => {
+    await inTemp(async (home) => {
+      const active = join(home, 'sessions', '2026', '09', '19')
+      const archived = join(home, 'archived_sessions')
+      await mkdir(active, { recursive: true })
+      await mkdir(archived)
+      const now = Date.parse('2026-09-19T22:00:00.000Z')
+      const source = async (root: string, name: string, producer: string): Promise<string> => {
+        const path = join(root, name)
+        await writeFile(path, lines([{ type: 'session_meta', timestamp: producer, payload: {} }]))
+        return path
+      }
+      const target = await source(
+        active,
+        'rollout-2026-09-19T06-00-00-target.jsonl',
+        '2026-09-19T11:00:00.000Z'
+      )
+      const duplicate = await source(
+        archived,
+        'rollout-2026-09-18T18-00-00-duplicate.jsonl',
+        '2026-09-18T23:00:00.000Z'
+      )
+      const boundary = await source(
+        archived,
+        'rollout-2026-09-18T00-00-00-boundary.jsonl',
+        '2026-09-18T22:00:00.000Z'
+      )
+      const outside = await source(
+        archived,
+        'rollout-2026-09-19T21-00-00-outside.jsonl',
+        '2026-09-18T21:59:59.999Z'
+      )
+      const paths = (): Promise<string[]> =>
+        rolloutPaths(home, { horizon: 1, now, cutoff: now - 86_400_000 })
+      const originalTimezone = process.env.TZ
+      try {
+        for (const timezone of ['UTC', 'America/Chicago', 'Asia/Tokyo']) {
+          process.env.TZ = timezone
+          expect(await paths()).toEqual([target, boundary, duplicate])
+        }
+      } finally {
+        if (originalTimezone === undefined) delete process.env.TZ
+        else process.env.TZ = originalTimezone
+      }
+      expect((await paths()).includes(outside)).toBe(false)
+
+      // Both sides of the spring and fall DST changes use explicit producer offsets.
+      await rm(target)
+      await rm(duplicate)
+      await rm(boundary)
+      await rm(outside)
+      const spring = await source(
+        join(home, 'sessions'),
+        'rollout-2026-03-08T03-00-00-spring.jsonl',
+        '2026-03-08T03:00:00-05:00'
+      )
+      const springNow = Date.parse('2026-03-09T08:00:00.000Z')
+      expect(
+        await rolloutPaths(home, { horizon: 1, now: springNow, cutoff: springNow - 86_400_000 })
+      ).toEqual([spring])
+      const fall = await source(
+        archived,
+        'rollout-2026-11-01T01-30-00-fall.jsonl',
+        '2026-11-01T01:30:00-06:00'
+      )
+      const fallNow = Date.parse('2026-11-02T07:30:00.000Z')
+      expect(
+        await rolloutPaths(home, { horizon: 1, now: fallNow, cutoff: fallNow - 86_400_000 })
+      ).toEqual([fall])
+    })
+  })
+
+  it('fails closed when the bounded opening metadata lacks a valid producer timestamp', async () => {
+    await inTemp(async (home) => {
+      const active = join(home, 'sessions')
+      await mkdir(active)
+      const path = join(active, 'rollout-2020-01-01T00-00-00-old.jsonl')
+      const now = Date.parse('2026-09-19T22:00:00.000Z')
+      const paths = (): Promise<string[]> =>
+        rolloutPaths(home, { horizon: 1, now, cutoff: now - 86_400_000 })
+      for (const value of [undefined, '2020-01-01T00:00:00', '2020-02-30T00:00:00Z']) {
+        await writeFile(
+          path,
+          lines([{ type: 'session_meta', ...(value ? { timestamp: value } : {}), payload: {} }])
+        )
+        await expect(paths()).rejects.toThrow(/producer timestamp/)
+      }
+      await writeFile(path, ' '.repeat(256_001))
+      await expect(paths()).rejects.toThrow(/opening metadata exceeds the line limit/)
     })
   })
 
@@ -841,13 +948,64 @@ async function authorityHarness(
 afterEach(() => vi.restoreAllMocks())
 
 describe('S15 selected authority window', () => {
+  it('blocks review when an apparently old archive lacks producer time', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir, { realInventory: true })
+      const archived = join(h.home, 'archived_sessions')
+      await mkdir(archived)
+      await writeFile(
+        join(archived, 'rollout-2020-01-01T00-00-00-unknown.jsonl'),
+        lines([{ type: 'session_meta', payload: { id: 'unknown' } }])
+      )
+      const candidate = await h.discover()
+      expect(candidate.status).toBe('blocked')
+      expect(candidate.reason).toContain('producer timestamp needs an explicit timezone')
+      expect(candidate.token).toBeUndefined()
+    })
+  })
+
+  it('blocks an 11h active closure plus 23h archived duplicate despite Chicago wall-clock filenames', async () => {
+    await inTemp(async (dir) => {
+      let now = Date.parse('2026-09-19T22:00:00.000Z')
+      const h = await authorityHarness(dir, { realInventory: true, now: () => now })
+      const active = join(h.home, 'sessions', '2026', '09', '19')
+      const archived = join(h.home, 'archived_sessions')
+      await mkdir(active, { recursive: true })
+      await mkdir(archived)
+      await rm(h.rollout)
+      const target = join(active, 'rollout-2026-09-19T06-00-00-target.jsonl')
+      const duplicate = join(archived, 'rollout-2026-09-18T18-00-00-duplicate.jsonl')
+      await writeFile(
+        target,
+        h.original.replace('2026-09-19T12:00:00.000Z', '2026-09-19T11:00:00.000Z')
+      )
+      await writeFile(
+        duplicate,
+        h.original.replace('2026-09-19T12:00:00.000Z', '2026-09-18T23:00:00.000Z')
+      )
+      const blocked = await h.discover()
+      expect(blocked.status).toBe('blocked')
+      expect(blocked.reason).toContain('Multiple terminal closures')
+      await rm(duplicate)
+      const reviewed = await h.discover()
+      expect(reviewed.status).toBe('ready')
+      now += 2 * 86_400_000
+      const saved = await h.intake.commit(reviewed.token!)
+      expect(saved.data.runs).toEqual([reviewed.run])
+      expect(h.writes).toHaveLength(1)
+    })
+  })
+
   it('excludes an older duplicate, requires rediscovery on selection change, and binds commit to the reviewed cutoff', async () => {
     await inTemp(async (dir) => {
       let now = Date.parse('2026-09-19T13:00:00.000Z')
       const h = await authorityHarness(dir, { realInventory: true, now: () => now })
       const archived = join(h.home, 'archived_sessions')
       await mkdir(archived)
-      await writeFile(join(archived, 'rollout-2026-09-16T12-00-00-duplicate.jsonl'), h.original)
+      await writeFile(
+        join(archived, 'rollout-2026-09-16T12-00-00-duplicate.jsonl'),
+        h.original.replace('2026-09-19T12:00:00.000Z', '2026-09-16T12:00:00.000Z')
+      )
       const oneDay = await h.intake.discover(1)
       const reviewed = oneDay.find((candidate) => candidate.receiptId === receiptId)!
       expect(reviewed.status).toBe('ready')
