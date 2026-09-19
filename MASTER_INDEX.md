@@ -1,7 +1,7 @@
 # PennyTel repository map
 
 Evidence-based map of the repository at accepted PennyTel `0.2.2` product
-candidate `f776f9f50a5cc38ffa4a5dd412b6d57d21e91716`. This
+candidate `2e8a5d1f78c147ca449d4c99d02e3cb3edabf293`. This
 is a navigation aid for future slices, not a replacement for the assigned
 GitHub Issue or the authoritative contracts in `docs/`.
 
@@ -17,7 +17,7 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - Slice 6 telemetry evidence context map: [`docs/context-maps/Slice_6_Telemetry_Evidence_Contract_Context_Map.md`](docs/context-maps/Slice_6_Telemetry_Evidence_Contract_Context_Map.md)
 - Slice 7 telemetry evidence surfaces/analysis context map: [`docs/context-maps/Slice_7_Telemetry_Evidence_Surfaces_and_Analysis_Context_Map.md`](docs/context-maps/Slice_7_Telemetry_Evidence_Surfaces_and_Analysis_Context_Map.md)
 - Accepted Slice 8 batch-import context map: [`docs/context-maps/Slice_8_Batch_Telemetry_Import_Context_Map.md`](docs/context-maps/Slice_8_Batch_Telemetry_Import_Context_Map.md)
-- Active Slice 9 storage-service/SQLite context map: [`docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md`](docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md)
+- Accepted Slice 9 storage-service/SQLite context map: [`docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md`](docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
 - Canonical registry input: [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json)
 - Runtime/verification record: [`docs/verification.md`](docs/verification.md) and [`docs/bounded-repair-verification.md`](docs/bounded-repair-verification.md)
@@ -49,6 +49,32 @@ map and use this master index when broader repository geography is needed.
   on-disk dataset owner. Registry seeding, validation, mutation serialization,
   revision checks, recovery guards, and backfill all pass through
   `TelemetryStore`.
+- [`src/main/storage-service.ts`](src/main/storage-service.ts) defines the
+  main-process `PennyTelStorageService` and replaceable
+  `DatasetProjectionRepository` boundary. `MainProcessStorageService` validates
+  and detaches Dataset values before delegating to an adapter; driver details
+  stay below this service/repository seam. S9 does not wire this projection
+  service into normal production load or mutation.
+- [`src/main/sqlite-projection.ts`](src/main/sqlite-projection.ts) implements
+  the `node:sqlite` `SqliteProjectionRepository` behind that seam. It is a
+  rebuildable SQLite projection, not canonical persistence: `TelemetryStore`
+  and `telemetry.json` remain the sole normal production authority, and normal
+  startup/load/mutate do not use SQLite. The adapter admits only its
+  deterministic application identity/schema version and exact expected schema;
+  it refuses forged foreign identities, unsupported/future versions, ambiguous
+  unversioned files, and structural mismatches. Its STRICT five-table schema
+  stores canonical record JSON plus only query-supporting relational fields,
+  foreign keys, and indexes, with verified WAL, foreign keys, NORMAL
+  synchronous mode, `trusted_schema=OFF`, and a 500 ms busy timeout.
+- The projection adapter owns bounded synchronous replacement/load transactions
+  and rollback, preserves Dataset revision, nested evidence, registry state,
+  optional-field Unknown semantics, and historical snapshots, and reconciles
+  redundant relational columns against each JSON record during reconstruction.
+  It enforces 50,000 records and 10,000,000 serialized/payload bytes, checks
+  physical counts and measured payload rather than trusting metadata, and
+  reconstructs through the shared normalization/validation path. It requires
+  an absolute service-owned path, so projection databases remain main-process
+  only and outside ASAR/application resources.
 - [`src/main/export.ts`](src/main/export.ts) is the main-process file-writing
   boundary for both raw dataset and derived comparison exports. It protects
   live/backup paths and uses an atomic destination replacement.
@@ -159,6 +185,30 @@ Storage files are in the Electron app-data directory by default, or the
 absolute directory named by `PENNYTEL_DATA_DIR`. A live file with any backup
 evidence is treated as recovery-sensitive; a missing live file plus backup
 evidence blocks loading/writing rather than silently starting empty.
+
+### SQLite projection (S9)
+
+- The SQLite projection file is `pennytel-projection.sqlite`, created by
+  [`src/main/sqlite-projection.ts`](src/main/sqlite-projection.ts) in an
+  absolute isolated user-data/QA directory. It is a rebuildable relational
+  projection for future storage work, not a second source of truth or a cutover
+  of the JSON authority.
+- `SqliteProjectionRepository` uses deterministic application/schema admission,
+  STRICT tables for the five current Dataset arrays, relationship foreign keys,
+  query indexes, and JSON retention for fields that do not need relational
+  querying. `replace()` writes the complete normalized snapshot in one
+  `BEGIN IMMEDIATE` transaction; failed writes roll back without publishing a
+  partial projection. `load()` uses a read transaction and fails closed on
+  missing metadata, non-contiguous rows, forged metadata, physical over-limit
+  data, invalid JSON, relational/JSON divergence, or serialized-size mismatch.
+- [`src/main/sqlite-projection-qa.ts`](src/main/sqlite-projection-qa.ts) is a
+  separate Electron main entry for durable adapter evidence. It exercises
+  representative create/restart round trips, known-zero versus omitted
+  telemetry, nested evidence, registry reconstruction, connection settings,
+  and an outside-ASAR path. [`scripts/electron-storage-qa.mjs`](scripts/electron-storage-qa.mjs)
+  runs those phases in an isolated temporary directory for built and packaged
+  Electron, then checks packaged restart behavior and the unchanged renderer
+  sandbox/context-isolation/no-node-integration and preload API boundary.
 
 ### Import and export paths
 
@@ -424,7 +474,7 @@ The bundled seed is statically imported by `src/main/store.ts` from
 - [`src/renderer/src/App.tsx`](src/renderer/src/App.tsx) and the main-process
   package metadata share the `package.json` version source; the sidebar/header
   display and `comparisonExport()` app metadata therefore remain aligned at
-  version `0.2.1` for the accepted schema-v2 product candidate.
+  version `0.2.2` for the accepted schema-v2 product candidate.
 
 ## Tests by architectural area
 
@@ -438,6 +488,7 @@ under `tests/**/*.test.{ts,tsx}`.
 | Execution evidence contract | [`tests/execution-evidence.test.ts`](tests/execution-evidence.test.ts), [`tests/execution-evidence-fixture.json`](tests/execution-evidence-fixture.json) | Deterministic v1 migration, v2 round-trip, strict nested bounds/unknown-field and privacy rejection, omitted/partial/zero evidence, provenance IDs/hash handling, token semantics, quota attribution isolation, malformed timestamp/number/count/percentage rejection, and price/relationship/revision preservation |
 | Registry contract and pricing authority | [`tests/registry.test.ts`](tests/registry.test.ts), [`tests/registry-fixtures.ts`](tests/registry-fixtures.ts) | Canonical seed, strict registry validation, identity ambiguity, dated/exclusive pricing, backfill, v1 portability, legacy migration/precedence, referenced identity retention |
 | Durable storage and recovery | [`tests/store.test.ts`](tests/store.test.ts), [`tests/registry-store.test.ts`](tests/registry-store.test.ts) | New/existing profiles, strict UTF-8/original-byte preservation, v1 read-without-rewrite and first-mutation migration, live/backup recovery evidence, external changes, atomic replacement failure, serialized/stale writers, registry startup and persisted backfill |
+| SQLite projection/service | [`tests/sqlite-projection.test.ts`](tests/sqlite-projection.test.ts) | Main-process service/adapter round trips, deterministic admission and schema/settings, strict relationships/indexes, rollback, close/reopen, bounded record/byte work, physical-reality checks, relational/JSON reconciliation, serialized metadata, nested evidence, registry, and Unknown/known-zero preservation |
 | Filesystem-safe export | [`tests/export.test.ts`](tests/export.test.ts) | Regular destinations, live/backup aliases, links, dangling/unresolvable identities, raw and comparison output |
 | Configuration identity and comparison | [`tests/configuration.test.ts`](tests/configuration.test.ts), [`tests/configuration-fixtures.ts`](tests/configuration-fixtures.ts), [`tests/comparison.test.ts`](tests/comparison.test.ts) | Canonical/alias identity, recorded thinking and Unknown behavior, ExtraHigh/XHigh presentation, collision-safe labels and bounded derived requests, multi-candidate/stage selection, grouping/filtering/export, raw import and historical cost/snapshot stability |
 | Comparison calculations/export | [`tests/comparison.test.ts`](tests/comparison.test.ts) | Cohort qualification, ORed stage scopes, full lifecycle retention, source and derived filters/grouping/order/selection, candidate evidence coverage, quality, unknown/zero/partial measurements, stale/untrusted export requests |
@@ -462,7 +513,9 @@ scripts exercise the real main/preload/renderer/filesystem path.
   gates are `npm run typecheck`, `npm test`, `npm run lint -- --max-warnings=0`,
   and `npm run build`.
 - [`electron.vite.config.ts`](electron.vite.config.ts) builds separate main,
-  preload, and renderer bundles; the renderer alias is `@renderer`.
+  preload, and renderer bundles; the main build emits the normal `index` entry
+  plus the isolated `sqlite-projection-qa` Electron entry, and the renderer
+  alias is `@renderer`.
 - [`electron-builder.yml`](electron-builder.yml) packages app ID
   `com.pennyos.pennytel` as PennyTel for Windows, macOS, and Linux targets.
   It excludes source/tests/docs from the packaged app and unpacks
@@ -470,8 +523,10 @@ scripts exercise the real main/preload/renderer/filesystem path.
 - `npm start` previews the production build. `npm run dev` launches Electron
   through electron-vite. Build output is under `out/`; packaged artifacts use
   `dist/` when produced.
+- `npm run test:storage-electron` runs the focused built Electron projection
+  create/restart/security smoke in [`scripts/electron-storage-qa.mjs`](scripts/electron-storage-qa.mjs).
 - `npm run test:electron` runs a build followed by the actual Electron QA
-  scripts in this order: [`scripts/electron-smoke.mjs`](scripts/electron-smoke.mjs),
+  scripts, beginning with that storage smoke and then [`scripts/electron-smoke.mjs`](scripts/electron-smoke.mjs),
   [`scripts/electron-repair-qa.mjs`](scripts/electron-repair-qa.mjs),
   [`scripts/electron-new-profile-qa.mjs`](scripts/electron-new-profile-qa.mjs),
   [`scripts/electron-registry-qa.mjs`](scripts/electron-registry-qa.mjs),
@@ -544,6 +599,12 @@ scripts exercise the real main/preload/renderer/filesystem path.
 
 - The main process owns authoritative dataset persistence; renderer state is a
   detached view/draft and every mutation is revision-checked.
+- SQLite projection state is not production authority: `TelemetryStore` and
+  `telemetry.json` remain the normal persistence path, and the renderer/preload/
+  IPC boundary has no SQLite, database-path, SQL, or general filesystem
+  authority. Future storage work should enter through the main-process
+  `PennyTelStorageService`/`DatasetProjectionRepository` seam rather than
+  importing `node:sqlite` into application or renderer code.
 - Writes are validated, serialized, flushed, and atomically replaced. Existing
   live data and recovery evidence are preserved on invalid/corrupt/failed
   operations. External live or backup changes fail closed before backup
@@ -624,6 +685,14 @@ scripts exercise the real main/preload/renderer/filesystem path.
 - New telemetry ingestion should enter through the typed `Mutation` union and
   `applyMutation`/`mergeImport`, with `validateRecord`/`validateDataset` and
   `TelemetryStore.mutate` remaining the transaction gates.
+- Future replaceable persistence adapters belong behind
+  `src/main/storage-service.ts`; the accepted S9 SQLite implementation is
+  `src/main/sqlite-projection.ts`. Keep `node:sqlite` main-process-only, keep
+  projection databases outside ASAR, preserve the JSON authority until an
+  explicit cutover slice, and rerun the built/packaged Linux Electron storage
+  smoke when the Electron/runtime version changes. S9 does not introduce JSON
+  artifact cutover, legacy migration, Reporter/Codex ingestion, or a new
+  renderer persistence path.
 - The schema-v2 execution-evidence contract is split deliberately:
   `src/shared/types.ts` relates optional evidence to `Run`,
   `src/shared/execution-evidence.ts` owns its nested types and strict
@@ -669,7 +738,8 @@ scripts exercise the real main/preload/renderer/filesystem path.
 
 - The repository documents and verifies local Linux Electron workflows; packaged
   installers and non-Linux runtime environments are configured but not verified
-  here.
+  here. S9's built and unpacked/ASAR storage evidence is Linux-only; Windows,
+  macOS, and installer-format storage behavior remain unverified.
 - Native file-picker interaction itself is harness-routed rather than manually
   exercised. Physical power-loss behavior is not directly tested, although
   atomic replacement failure is covered.
