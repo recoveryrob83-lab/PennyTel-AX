@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
+import { statSync, utimesSync, writeFileSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -277,6 +278,63 @@ describe('current Codex 0.155.1 closed-turn adapter', () => {
 })
 
 describe('S13 accepted repair regressions', () => {
+  it.each(['rewrite-and-append', 'same-size-rewrite'])(
+    'rejects a %s during commit revalidation',
+    async (change) => {
+      await inTemp(async (dir) => {
+        const receiptDirectory = join(dir, 'receipts')
+        await mkdir(receiptDirectory)
+        await writeFile(join(receiptDirectory, `${receiptId}.json`), receipt(receiptId).text)
+        const rollout = join(dir, 'rollout-test.jsonl')
+        const original = lines((await fixtureRecords()).slice(0, 10))
+        await writeFile(rollout, original)
+        const stableTime = new Date('2024-01-01T00:00:00.000Z')
+        utimesSync(rollout, stableTime, stableTime)
+        let armed = false
+        let writes = 0
+        const checkingReporter = {
+          ...reporter,
+          matchTerminalBlockToReceipt(message: string, receiptText: string) {
+            const matched = reporter.matchTerminalBlockToReceipt(message, receiptText)
+            if (armed) {
+              armed = false
+              const before = statSync(rollout)
+              const rewritten = original.replace('gpt-6-astra', 'gpt-6-terra')
+              expect(rewritten).not.toBe(original)
+              expect(rewritten.length).toBe(original.length)
+              writeFileSync(
+                rollout,
+                change === 'rewrite-and-append' ? rewritten + lines([started('later')]) : rewritten
+              )
+              if (change === 'same-size-rewrite') utimesSync(rollout, before.atime, before.mtime)
+            }
+            return matched
+          }
+        }
+        const store = {
+          load: async () => ({
+            data: { ...emptyDataset(), slices: [{ id: 'S13', title: 'Intake' }] },
+            path: dir
+          }),
+          mutate: async () => {
+            writes++
+            return { data: emptyDataset(), path: dir }
+          }
+        } as unknown as ProductionStore
+        const intake = new CodexIntake(resolve('.'), store, checkingReporter, dir, {
+          receiptDirectory,
+          rolloutFiles: [rollout],
+          sourceRepositoryRoot: '/synthetic'
+        })
+        const candidate = (await intake.discover()).find((item) => item.receiptId === receiptId)!
+        expect(candidate.status).toBe('ready')
+        armed = true
+        await expect(intake.commit(candidate.token!)).rejects.toThrow('closure evidence changed')
+        expect(writes).toBe(0)
+      })
+    }
+  )
+
   it('binds preview to closure bytes and file identity while allowing a later append', async () => {
     await inTemp(async (dir) => {
       const receiptDirectory = join(dir, 'receipts')
@@ -526,12 +584,16 @@ describe('S13 accepted repair regressions', () => {
         ])
       )
       await writeFile(malformed, lines([fixture[0]]) + '{broken json\n')
+      let writes = 0
       const store = {
         load: async () => ({
           data: { ...emptyDataset(), slices: [{ id: 'S13', title: 'Intake' }] },
           path: dir
         }),
-        mutate: async () => ({ data: emptyDataset(), path: dir })
+        mutate: async () => {
+          writes++
+          return { data: emptyDataset(), path: dir }
+        }
       } as unknown as ProductionStore
       const intake = new CodexIntake(resolve('.'), store, reporter, dir, {
         receiptDirectory,
@@ -540,8 +602,12 @@ describe('S13 accepted repair regressions', () => {
       })
       const status = async (id: string): Promise<CodexIntakeCandidate> =>
         (await intake.discover()).find((item) => item.receiptId === id)!
-      expect((await status(receiptId)).status).toBe('ready')
+      const ready = await status(receiptId)
+      expect(ready.status).toBe('ready')
       expect((await status(otherId)).status).toBe('blocked')
+      const commitReady = await status(receiptId)
+      await intake.commit(commitReady.token!)
+      expect(writes).toBe(1)
       await writeFile(
         good,
         lines([
@@ -551,6 +617,19 @@ describe('S13 accepted repair regressions', () => {
         ])
       )
       expect((await status(receiptId)).status).toBe('ready')
+      await writeFile(
+        good,
+        lines([
+          ...fixture.slice(0, 10),
+          started('later'),
+          { ...fixture[3], payload: { ...fixture[3].payload, turn_id: 'later', cwd: '/foreign' } },
+          completed('later'),
+          started('again'),
+          fixture[8],
+          completed('again')
+        ])
+      )
+      expect((await status(receiptId)).reason).toContain('Multiple terminal closures')
       await writeFile(
         good,
         lines([...fixture.slice(0, 10), started('again'), fixture[8], completed('again')])

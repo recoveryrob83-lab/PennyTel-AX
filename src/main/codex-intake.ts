@@ -83,12 +83,14 @@ class PartialScanError extends Error {
   constructor(
     message: string,
     readonly matches: Match[],
-    readonly affected: Set<string> | undefined = undefined
+    readonly affected: Set<string> | undefined = undefined,
+    readonly canUseMatches = false
   ) {
     super(message)
   }
 }
 class UnrelatedRolloutError extends Error {}
+class SourceChangedError extends Error {}
 class ReceiptConflictError extends Error {
   constructor(readonly receiptId: string) {
     super('Multiple terminal closures match this receipt.')
@@ -445,10 +447,20 @@ export async function scanFile(
   let turn: Turn | undefined
   const results: Match[] = []
   const mentioned = new Set<string>()
+  const untrustedMatches = new Set<string>()
   let scanError: Error | undefined
   let fullyInspected = false
   let sourceDevice = 0
   let sourceInode = 0
+  const recordError = (error: Error): void => {
+    if (error instanceof UnrelatedRolloutError) throw error
+    if (!scanError || error instanceof ReceiptConflictError) scanError = error
+    if (results.length) {
+      // A bad resumed turn must not hide a subsequent independent closure.
+      turn = undefined
+      prior = undefined
+    }
+  }
   const processLine = (line: Buffer): void => {
     lineNumber++
     budget.lines++
@@ -659,16 +671,19 @@ export async function scanFile(
         const complete = bytes.subarray(start, i + 1)
         hash.update(complete)
         offset += complete.length
-        if (scanError) {
+        if (scanError && !results.length) {
           const raw = line.toString('utf8')
           for (const receiptId of receipts.keys())
             if (raw.includes(receiptId)) mentioned.add(receiptId)
         } else {
           try {
+            const previousCount = results.length
             processLine(line)
+            if (scanError)
+              for (const match of results.slice(previousCount))
+                untrustedMatches.add(match.receipt.report.receiptId)
           } catch (error) {
-            if (error instanceof UnrelatedRolloutError) throw error
-            scanError = error as Error
+            recordError(error as Error)
           }
         }
         start = i + 1
@@ -679,53 +694,115 @@ export async function scanFile(
         if (pending.length) {
           hash.update(pending)
           offset += pending.length
-          if (scanError) {
+          if (scanError && !results.length) {
             const raw = pending.toString('utf8')
             for (const receiptId of receipts.keys())
               if (raw.includes(receiptId)) mentioned.add(receiptId)
           } else {
             try {
+              const previousCount = results.length
               processLine(pending)
+              if (scanError)
+                for (const match of results.slice(previousCount))
+                  untrustedMatches.add(match.receipt.report.receiptId)
             } catch (error) {
-              if (error instanceof UnrelatedRolloutError) throw error
-              scanError = error as Error
+              recordError(error as Error)
             }
           }
           pending = Buffer.alloc(0)
         }
       }
     }
-    const after = await lstat(file)
-    if (
-      (await realpath(file)) !== file ||
-      after.dev !== opened.dev ||
-      after.ino !== opened.ino ||
-      after.size < offset ||
-      (after.size !== before.size && !results.length) ||
-      (after.size === before.size && after.mtimeMs !== opened.mtimeMs)
-    )
-      throw new Error('Rollout changed during discovery.')
+    if (results.length) {
+      const sameSnapshot = (left: typeof opened, right: typeof opened): boolean =>
+        left.dev === right.dev &&
+        left.ino === right.ino &&
+        left.size === right.size &&
+        left.mtimeMs === right.mtimeMs &&
+        left.ctimeMs === right.ctimeMs
+      let verified = false
+      for (let attempt = 0; attempt < 3 && !verified; attempt++) {
+        const start = await fd.stat()
+        const pathStart = await lstat(file)
+        if (
+          (await realpath(file)) !== file ||
+          start.dev !== opened.dev ||
+          start.ino !== opened.ino ||
+          pathStart.dev !== opened.dev ||
+          pathStart.ino !== opened.ino ||
+          start.size < before.size ||
+          pathStart.size < before.size
+        )
+          throw new SourceChangedError('Rollout changed during discovery.')
+        if (!sameSnapshot(start, pathStart)) continue
+        const verifiedHash = createHash('sha256')
+        const chunk = Buffer.alloc(64 * 1024)
+        let verifiedBytes = 0
+        for (const match of results) {
+          while (verifiedBytes < match.prefixBytes) {
+            const count = Math.min(chunk.length, match.prefixBytes - verifiedBytes)
+            if (budget.bytes + count > MAX_TOTAL_BYTES)
+              throw new Error('Discovery exceeds the 128 MB read limit.')
+            const read = await fd.read(chunk, 0, count, verifiedBytes)
+            if (!read.bytesRead) throw new SourceChangedError('Rollout changed during discovery.')
+            verifiedHash.update(chunk.subarray(0, read.bytesRead))
+            verifiedBytes += read.bytesRead
+            budget.bytes += read.bytesRead
+          }
+          if (verifiedHash.copy().digest('hex') !== match.prefixHash)
+            throw new SourceChangedError('Rollout closure evidence changed during discovery.')
+        }
+        const end = await fd.stat()
+        const pathEnd = await lstat(file)
+        if (
+          (await realpath(file)) !== file ||
+          end.dev !== opened.dev ||
+          end.ino !== opened.ino ||
+          pathEnd.dev !== opened.dev ||
+          pathEnd.ino !== opened.ino ||
+          end.size < before.size ||
+          pathEnd.size < before.size
+        )
+          throw new SourceChangedError('Rollout changed during discovery.')
+        verified = sameSnapshot(start, end) && sameSnapshot(end, pathEnd)
+      }
+      if (!verified) throw new SourceChangedError('Rollout changed during discovery.')
+    } else {
+      const after = await lstat(file)
+      if (
+        (await realpath(file)) !== file ||
+        after.dev !== opened.dev ||
+        after.ino !== opened.ino ||
+        after.size !== before.size ||
+        after.mtimeMs !== opened.mtimeMs ||
+        after.ctimeMs !== opened.ctimeMs
+      )
+        throw new SourceChangedError('Rollout changed during discovery.')
+    }
     fullyInspected = true
     if (scanError) throw scanError
     return results
   } catch (error) {
     if (error instanceof UnrelatedRolloutError) throw error
     const message = (error as Error).message
+    const canUseMatches = fullyInspected && !(error instanceof SourceChangedError)
     const affected =
       error instanceof ReceiptConflictError
         ? new Set([error.receiptId])
-        : !fullyInspected
+        : !canUseMatches
           ? undefined
           : results.length
             ? new Set(
-                [...mentioned].filter(
-                  (id) => !results.some((match) => match.receipt.report.receiptId === id)
+                [...mentioned, ...untrustedMatches].filter(
+                  (id) =>
+                    !results.some((match) => match.receipt.report.receiptId === id) ||
+                    untrustedMatches.has(id)
                 )
               )
             : mentioned.size || fullyInspected
               ? mentioned
               : undefined
-    throw new PartialScanError(message, results, affected)
+    throw new PartialScanError(message, results, affected, canUseMatches)
   } finally {
     await fd.close()
   }
@@ -844,13 +921,15 @@ export class CodexIntake {
             ])
         } catch (error) {
           if (error instanceof UnrelatedRolloutError) continue
-          const partial = error instanceof PartialScanError ? error.matches : []
+          const partial =
+            error instanceof PartialScanError && error.canUseMatches ? error.matches : []
           for (const match of partial)
             matches.set(match.receipt.report.receiptId, [
               ...(matches.get(match.receipt.report.receiptId) ?? []),
               match
             ])
-          const affected = error instanceof PartialScanError ? error.affected : undefined
+          const affected =
+            error instanceof PartialScanError && error.canUseMatches ? error.affected : undefined
           const protectedIds = new Set(partial.map((match) => match.receipt.report.receiptId))
           for (const receipt of pending) {
             const id = receipt.report.receiptId
@@ -980,14 +1059,9 @@ export class CodexIntake {
         )
       } catch (error) {
         if (error instanceof UnrelatedRolloutError) continue
-        if (
-          !(error instanceof PartialScanError) ||
-          error.affected?.has(freshReceipt.report.receiptId) ||
-          !error.matches.some(
-            (match) => match.receipt.report.receiptId === freshReceipt.report.receiptId
-          )
-        )
+        if (!(error instanceof PartialScanError) || !error.canUseMatches || !error.affected)
           throw error
+        if (error.affected.has(freshReceipt.report.receiptId)) throw error
         found.push(...error.matches)
       }
     }
