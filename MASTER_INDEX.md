@@ -1,7 +1,7 @@
 # PennyTel repository map
 
 Evidence-based map of the repository at accepted PennyTel `0.2.2` product
-candidate `2e8a5d1f78c147ca449d4c99d02e3cb3edabf293`. This
+candidate `34e2b539eb2cb0d745506ada81bc9ae5f6b3b874`. This
 is a navigation aid for future slices, not a replacement for the assigned
 GitHub Issue or the authoritative contracts in `docs/`.
 
@@ -18,7 +18,7 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - Slice 7 telemetry evidence surfaces/analysis context map: [`docs/context-maps/Slice_7_Telemetry_Evidence_Surfaces_and_Analysis_Context_Map.md`](docs/context-maps/Slice_7_Telemetry_Evidence_Surfaces_and_Analysis_Context_Map.md)
 - Accepted Slice 8 batch-import context map: [`docs/context-maps/Slice_8_Batch_Telemetry_Import_Context_Map.md`](docs/context-maps/Slice_8_Batch_Telemetry_Import_Context_Map.md)
 - Accepted Slice 9 storage-service/SQLite context map: [`docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md`](docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md)
-- Active Slice 10 canonical-artifact/publish-recovery context map: [`docs/context-maps/Slice_10_Canonical_JSON_Artifact_Store_Publish_Recovery_Context_Map.md`](docs/context-maps/Slice_10_Canonical_JSON_Artifact_Store_Publish_Recovery_Context_Map.md)
+- Accepted Slice 10 canonical-artifact/publish-recovery context map: [`docs/context-maps/Slice_10_Canonical_JSON_Artifact_Store_Publish_Recovery_Context_Map.md`](docs/context-maps/Slice_10_Canonical_JSON_Artifact_Store_Publish_Recovery_Context_Map.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
 - Canonical registry input: [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json)
 - Runtime/verification record: [`docs/verification.md`](docs/verification.md) and [`docs/bounded-repair-verification.md`](docs/bounded-repair-verification.md)
@@ -67,6 +67,22 @@ map and use this master index when broader repository geography is needed.
   stores canonical record JSON plus only query-supporting relational fields,
   foreign keys, and indexes, with verified WAL, foreign keys, NORMAL
   synchronous mode, `trusted_schema=OFF`, and a 500 ms busy timeout.
+- [`src/main/canonical-artifacts.ts`](src/main/canonical-artifacts.ts) defines
+  the version-1 self-describing canonical record and dataset envelopes. Record
+  and dataset contents, validated stable IDs, and dataset metadata carry
+  semantics; folder placement remains organizational. Record paths use a
+  table-specific prefix plus a deterministic SHA-256 of the UTF-16 code units
+  of the stable ID, preserving distinct valid IDs including lone surrogates and
+  escape-prefixed IDs.
+- [`src/main/canonical-artifact-store.ts`](src/main/canonical-artifact-store.ts)
+  is the isolated S10 main-process canonical JSON store and publish coordinator.
+  It sits above `PennyTelStorageService`: canonical artifacts are authoritative
+  within this subsystem and SQLite is a rebuildable downstream projection. The
+  store uses durable pending receipts with `prepared`, `publishing`, and
+  `published` states, direct-child staging/tombstone/receipt files under a
+  flattened store root, metadata-last publication, and bounded idempotent
+  recovery. Normal PennyTel startup/load/mutate remains on `TelemetryStore` /
+  `telemetry.json`; S11 owns migration, reconciliation, and production cutover.
 - The projection adapter owns bounded synchronous replacement/load transactions
   and rollback, preserves Dataset revision, nested evidence, registry state,
   optional-field Unknown semantics, and historical snapshots, and reconciles
@@ -187,7 +203,7 @@ absolute directory named by `PENNYTEL_DATA_DIR`. A live file with any backup
 evidence is treated as recovery-sensitive; a missing live file plus backup
 evidence blocks loading/writing rather than silently starting empty.
 
-### SQLite projection (S9)
+### SQLite projection (S9, extended by S10)
 
 - The SQLite projection file is `pennytel-projection.sqlite`, created by
   [`src/main/sqlite-projection.ts`](src/main/sqlite-projection.ts) in an
@@ -202,14 +218,44 @@ evidence blocks loading/writing rather than silently starting empty.
   partial projection. `load()` uses a read transaction and fails closed on
   missing metadata, non-contiguous rows, forged metadata, physical over-limit
   data, invalid JSON, relational/JSON divergence, or serialized-size mismatch.
+- Relational identity columns and foreign-key values pass through the local
+  `projectionIdentity()` encoding for valid IDs that SQLite's binding would
+  alias, including lone UTF-16 surrogates and IDs beginning with the escape
+  prefix. The original JSON/domain IDs remain unchanged; encoded values are
+  implementation details of the projection and are never canonical identity.
 - [`src/main/sqlite-projection-qa.ts`](src/main/sqlite-projection-qa.ts) is a
   separate Electron main entry for durable adapter evidence. It exercises
   representative create/restart round trips, known-zero versus omitted
   telemetry, nested evidence, registry reconstruction, connection settings,
-  and an outside-ASAR path. [`scripts/electron-storage-qa.mjs`](scripts/electron-storage-qa.mjs)
+  and an outside-ASAR path. S10 extends the same entry with canonical artifact
+  publication interruption and restart recovery. [`scripts/electron-storage-qa.mjs`](scripts/electron-storage-qa.mjs)
   runs those phases in an isolated temporary directory for built and packaged
-  Electron, then checks packaged restart behavior and the unchanged renderer
+  Electron, then checks packaged restart behavior, writable artifact paths
+  outside ASAR, and the unchanged renderer
   sandbox/context-isolation/no-node-integration and preload API boundary.
+
+### Canonical JSON artifact store (S10)
+
+- `CanonicalArtifactStore` validates the current Dataset through the shared
+  validation/normalization path, bounds record and byte work, and publishes a
+  coherent artifact set under an absolute writable `canonical-artifact-store`
+  root. The dataset metadata artifact records revision, registry state, and the
+  ordered stable IDs for each table; individual record artifacts retain the
+  full validated record.
+- A publish first writes and flushes staged artifacts and a durable pending
+  receipt, then applies direct-root artifact renames and tombstoned deletes,
+  publishes dataset metadata last, projects the resulting canonical Dataset to
+  SQLite, and clears the receipt. Root/layout identity is revalidated before
+  pathname-sensitive writes and between publish phases. The flattened layout
+  reduces the replaceable nested-parent risk, while the narrow portable
+  pathname check-to-kernel-use race remains an explicit limitation.
+- Recovery is receipt-driven and idempotent. Prepared transactions are checked
+  against the prior canonical state and discarded; publishing or published
+  transactions finish canonical publication, verify the canonical digest, and
+  reproject before clearing durable state. Missing or contradictory artifacts,
+  unsafe substitutions, or projection-only state fail closed rather than
+  inferring authority. This subsystem does not perform S11's full artifact
+  scan/rebuild or legacy migration.
 
 ### Import and export paths
 
@@ -489,7 +535,8 @@ under `tests/**/*.test.{ts,tsx}`.
 | Execution evidence contract | [`tests/execution-evidence.test.ts`](tests/execution-evidence.test.ts), [`tests/execution-evidence-fixture.json`](tests/execution-evidence-fixture.json) | Deterministic v1 migration, v2 round-trip, strict nested bounds/unknown-field and privacy rejection, omitted/partial/zero evidence, provenance IDs/hash handling, token semantics, quota attribution isolation, malformed timestamp/number/count/percentage rejection, and price/relationship/revision preservation |
 | Registry contract and pricing authority | [`tests/registry.test.ts`](tests/registry.test.ts), [`tests/registry-fixtures.ts`](tests/registry-fixtures.ts) | Canonical seed, strict registry validation, identity ambiguity, dated/exclusive pricing, backfill, v1 portability, legacy migration/precedence, referenced identity retention |
 | Durable storage and recovery | [`tests/store.test.ts`](tests/store.test.ts), [`tests/registry-store.test.ts`](tests/registry-store.test.ts) | New/existing profiles, strict UTF-8/original-byte preservation, v1 read-without-rewrite and first-mutation migration, live/backup recovery evidence, external changes, atomic replacement failure, serialized/stale writers, registry startup and persisted backfill |
-| SQLite projection/service | [`tests/sqlite-projection.test.ts`](tests/sqlite-projection.test.ts) | Main-process service/adapter round trips, deterministic admission and schema/settings, strict relationships/indexes, rollback, close/reopen, bounded record/byte work, physical-reality checks, relational/JSON reconciliation, serialized metadata, nested evidence, registry, and Unknown/known-zero preservation |
+| SQLite projection/service | [`tests/sqlite-projection.test.ts`](tests/sqlite-projection.test.ts) | Main-process service/adapter round trips, deterministic admission and schema/settings, strict relationships/indexes, rollback, close/reopen, bounded record/byte work, physical-reality checks, relational/JSON reconciliation, serialized metadata, nested evidence, registry, Unknown/known-zero preservation, and hostile valid-ID relational identity/relationship regression coverage |
+| Canonical artifact store/publish recovery | [`tests/canonical-artifact-store.test.ts`](tests/canonical-artifact-store.test.ts) | Self-describing canonical identity/path safety, artifact-before-projection authority, staged metadata-last publication, durable receipt phases, interruption/recovery idempotency, tombstoned deletes, malformed/foreign admission, bounded work, root/nested substitution checks, and hostile valid IDs |
 | Filesystem-safe export | [`tests/export.test.ts`](tests/export.test.ts) | Regular destinations, live/backup aliases, links, dangling/unresolvable identities, raw and comparison output |
 | Configuration identity and comparison | [`tests/configuration.test.ts`](tests/configuration.test.ts), [`tests/configuration-fixtures.ts`](tests/configuration-fixtures.ts), [`tests/comparison.test.ts`](tests/comparison.test.ts) | Canonical/alias identity, recorded thinking and Unknown behavior, ExtraHigh/XHigh presentation, collision-safe labels and bounded derived requests, multi-candidate/stage selection, grouping/filtering/export, raw import and historical cost/snapshot stability |
 | Comparison calculations/export | [`tests/comparison.test.ts`](tests/comparison.test.ts) | Cohort qualification, ORed stage scopes, full lifecycle retention, source and derived filters/grouping/order/selection, candidate evidence coverage, quality, unknown/zero/partial measurements, stale/untrusted export requests |
@@ -515,8 +562,9 @@ scripts exercise the real main/preload/renderer/filesystem path.
   and `npm run build`.
 - [`electron.vite.config.ts`](electron.vite.config.ts) builds separate main,
   preload, and renderer bundles; the main build emits the normal `index` entry
-  plus the isolated `sqlite-projection-qa` Electron entry, and the renderer
-  alias is `@renderer`.
+  plus the isolated `sqlite-projection-qa` Electron entry, which now exercises
+  both S9 projection and S10 canonical artifact publish/recovery, and the
+  renderer alias is `@renderer`.
 - [`electron-builder.yml`](electron-builder.yml) packages app ID
   `com.pennyos.pennytel` as PennyTel for Windows, macOS, and Linux targets.
   It excludes source/tests/docs from the packaged app and unpacks
@@ -525,7 +573,8 @@ scripts exercise the real main/preload/renderer/filesystem path.
   through electron-vite. Build output is under `out/`; packaged artifacts use
   `dist/` when produced.
 - `npm run test:storage-electron` runs the focused built Electron projection
-  create/restart/security smoke in [`scripts/electron-storage-qa.mjs`](scripts/electron-storage-qa.mjs).
+  and canonical artifact publish/recovery create/restart/security smoke in
+  [`scripts/electron-storage-qa.mjs`](scripts/electron-storage-qa.mjs).
 - `npm run test:electron` runs a build followed by the actual Electron QA
   scripts, beginning with that storage smoke and then [`scripts/electron-smoke.mjs`](scripts/electron-smoke.mjs),
   [`scripts/electron-repair-qa.mjs`](scripts/electron-repair-qa.mjs),
@@ -600,10 +649,12 @@ scripts exercise the real main/preload/renderer/filesystem path.
 
 - The main process owns authoritative dataset persistence; renderer state is a
   detached view/draft and every mutation is revision-checked.
-- SQLite projection state is not production authority: `TelemetryStore` and
-  `telemetry.json` remain the normal persistence path, and the renderer/preload/
-  IPC boundary has no SQLite, database-path, SQL, or general filesystem
-  authority. Future storage work should enter through the main-process
+- SQLite projection state is not normal production authority: `TelemetryStore`
+  and `telemetry.json` remain the live persistence path, and the
+  renderer/preload/IPC boundary has no SQLite, database-path, SQL, artifact-path,
+  or general filesystem authority. Inside the isolated S10 subsystem, canonical
+  JSON artifacts outrank SQLite, which remains rebuildable projection state.
+  Future storage work should enter through the main-process
   `PennyTelStorageService`/`DatasetProjectionRepository` seam rather than
   importing `node:sqlite` into application or renderer code.
 - Writes are validated, serialized, flushed, and atomically replaced. Existing
@@ -688,12 +739,15 @@ scripts exercise the real main/preload/renderer/filesystem path.
   `TelemetryStore.mutate` remaining the transaction gates.
 - Future replaceable persistence adapters belong behind
   `src/main/storage-service.ts`; the accepted S9 SQLite implementation is
-  `src/main/sqlite-projection.ts`. Keep `node:sqlite` main-process-only, keep
-  projection databases outside ASAR, preserve the JSON authority until an
-  explicit cutover slice, and rerun the built/packaged Linux Electron storage
-  smoke when the Electron/runtime version changes. S9 does not introduce JSON
-  artifact cutover, legacy migration, Reporter/Codex ingestion, or a new
-  renderer persistence path.
+  `src/main/sqlite-projection.ts`, and the S10 canonical publish coordinator is
+  `src/main/canonical-artifact-store.ts`. Keep `node:sqlite` and all artifact
+  filesystem authority main-process-only, keep projection/artifact/receipt data
+  outside ASAR, preserve `TelemetryStore` / `telemetry.json` as normal
+  production authority until S11's explicit cutover, and rerun the
+  built/packaged Linux Electron storage smoke when the Electron/runtime version
+  changes. S10 does not introduce legacy migration, full rebuild/reconciliation,
+  Reporter/Codex ingestion, or a new renderer persistence path; those remain
+  later-slice responsibilities.
 - The schema-v2 execution-evidence contract is split deliberately:
   `src/shared/types.ts` relates optional evidence to `Run`,
   `src/shared/execution-evidence.ts` owns its nested types and strict
@@ -739,11 +793,13 @@ scripts exercise the real main/preload/renderer/filesystem path.
 
 - The repository documents and verifies local Linux Electron workflows; packaged
   installers and non-Linux runtime environments are configured but not verified
-  here. S9's built and unpacked/ASAR storage evidence is Linux-only; Windows,
+  here. S9/S10 built and unpacked/ASAR storage evidence is Linux-only; Windows,
   macOS, and installer-format storage behavior remain unverified.
 - Native file-picker interaction itself is harness-routed rather than manually
-  exercised. Physical power-loss behavior is not directly tested, although
-  atomic replacement failure is covered.
+  exercised. Physical power-loss behavior is not directly tested. The S10
+  flattened layout and repeated identity checks reduce pathname substitution
+  exposure but cannot eliminate the narrow portable pathname check-to-kernel-use
+  race; neither limitation is claimed solved.
 - There is no production dataset, network price fetch, model execution, cloud
   or Sheet synchronization, or statistical-significance machinery in this
   repository. Unknown telemetry is intentionally not reconstructed.
