@@ -1,7 +1,7 @@
 # PennyTel repository map
 
-Evidence-based map of the repository at accepted PennyTel `0.2.2` product
-candidate `02676c620c2ae140b5ae3e9c4b1a8ca0559a4d4c`. This
+Evidence-based map of the repository at accepted PennyTel `0.2.2` repository
+candidate `affac3608345ce3ac4c31f28450f0552bd1afed0`. This
 is a navigation aid for future slices, not a replacement for the assigned
 GitHub Issue or the authoritative contracts in `docs/`.
 
@@ -20,7 +20,8 @@ GitHub Issue or the authoritative contracts in `docs/`.
 - Accepted Slice 9 storage-service/SQLite context map: [`docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md`](docs/context-maps/Slice_9_Storage_Service_SQLite_Projection_Context_Map.md)
 - Accepted Slice 10 canonical-artifact/publish-recovery context map: [`docs/context-maps/Slice_10_Canonical_JSON_Artifact_Store_Publish_Recovery_Context_Map.md`](docs/context-maps/Slice_10_Canonical_JSON_Artifact_Store_Publish_Recovery_Context_Map.md)
 - Accepted Slice 11 legacy-migration/canonical-production-cutover context map: [`docs/context-maps/Slice_11_Legacy_Dataset_Migration_Canonical_Production_Cutover_Context_Map.md`](docs/context-maps/Slice_11_Legacy_Dataset_Migration_Canonical_Production_Cutover_Context_Map.md)
-- Active Slice 12 pennyReporter integration/adoption context map: [`docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md`](docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md)
+- Accepted Slice 12 pennyReporter integration/adoption context map: [`docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md`](docs/context-maps/Slice_12_Reporter_Integration_Adoption_Context_Map.md)
+- pennyReporter consumer contract and S13 handoff: [`docs/pennyreporter-integration.md`](docs/pennyreporter-integration.md)
 - Historical schema reconciliation: [`docs/schema-reconciliation.md`](docs/schema-reconciliation.md)
 - Canonical registry input: [`docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json`](docs/PennyTel_Model_Registry_v0.2_Canonical_Seed_2026-09-12.json)
 - Runtime/verification record: [`docs/verification.md`](docs/verification.md) and [`docs/bounded-repair-verification.md`](docs/bounded-repair-verification.md)
@@ -29,6 +30,15 @@ Slice-specific repository maps live under [`docs/context-maps/`](docs/context-ma
 The assigned GitHub Issue is the executable slice contract and points to its
 companion map. `AGENTS.md` owns worker-role behavior. Start from the companion
 map and use this master index when broader repository geography is needed.
+
+## Factory reporting integration
+
+- PennyTel consumes the independently installed `pennyReporter` CLI; Reporter implementation remains owned by the sibling `PennyOS-Reporter` repository and is not vendored into PennyTel.
+- Canonical project/slice identity remains tracked in `pennyos/project.json` and `pennyos/slices/<sliceId>.json`. pennyReporter derives identity from those files rather than accepting caller overrides.
+- Worker-close receipts are local workflow evidence under `.pennyos/runtime/receipts/`. `.gitignore` ignores `.pennyos/runtime/` while leaving tracked `pennyos/` identity visible to Git.
+- The canonical worker-close protocol is `PENNYOS_TURN_REPORT_V1`. Workers invoke pennyReporter and copy its generated block verbatim as the terminal block of their final response; hand-authored receipt IDs or blocks are non-authoritative.
+- Reporter receipts do not mutate or become PennyTel canonical telemetry. S13 owns pairing the final terminal report and matching local receipt with independently sourced Codex session/turn evidence before any telemetry import.
+- Consumer-side receipt validation/matching uses pennyReporter's public `validateReceipt` and `matchTerminalBlockToReceipt` seam; PennyTel should not reimplement the protocol.
 
 ## Runtime ownership and boundaries
 
@@ -723,6 +733,7 @@ scripts exercise the real main/preload/renderer/filesystem path.
 
 ### Invariants future workers must preserve
 
+- `pennyos/` is tracked factory identity; `.pennyos/runtime/` is ignored local workflow evidence. pennyReporter receipts and `PENNYOS_TURN_REPORT_V1` closure signals are not PennyTel Dataset authority and must not be silently promoted into telemetry without the explicit ingestion/review path.
 - The main process owns authoritative dataset persistence through
   `ProductionStore`; canonical JSON artifacts are normal production authority,
   renderer state is a detached view/draft, and every mutation is revision-checked.
