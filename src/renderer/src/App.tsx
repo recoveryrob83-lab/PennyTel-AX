@@ -197,6 +197,7 @@ export default function App(): React.JSX.Element {
               onEdit={openEditor}
               onOpenRun={openRun}
               onDelete={askDelete}
+              onSave={save}
             />
           )}
           {page === 'compare' && (

@@ -603,6 +603,12 @@ export function acceptedEconomics(
   }
 }
 type AcceptedEconomics = ReturnType<typeof acceptedEconomics>
+export type EvidenceCoverage = 'None' | 'Partial' | 'Complete'
+/** Attachment coverage among the runs in this accepted lifecycle, not completeness of nested fields. */
+export function executionEvidenceCoverage(runs: Run[]): EvidenceCoverage {
+  const attached = runs.filter((run) => run.executionEvidence !== undefined).length
+  return !attached ? 'None' : attached === runs.length ? 'Complete' : 'Partial'
+}
 function completeRepairCost(a: AcceptedEconomics): number | null {
   const repair = a.outcome.repair
   const missingLink = a.findings.some(

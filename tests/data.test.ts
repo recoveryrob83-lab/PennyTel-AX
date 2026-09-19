@@ -7,6 +7,24 @@ import { runCost } from '../src/shared/metrics'
 const save = (data: Dataset, table: Table, record: Entity): Dataset =>
   applyMutation(data, { kind: 'save', table, record, revision: data.revision })
 describe('validated transactions and imports', () => {
+  it('preserves every explicit verification state and omitted historical state independently of result', () => {
+    for (const verification of ['Passed', 'Failed', 'Partial', 'Not run', 'Unknown'] as const) {
+      const source = fixture()
+      source.runs = [runFixture({ result: 'Needs repair', verification })]
+      validateDataset(source)
+      const imported = mergeImport(emptyDataset(), JSON.stringify(source)).data
+      expect(imported.runs[0].verification).toBe(verification)
+      expect(imported.runs[0].result).toBe('Needs repair')
+    }
+    const historical = fixture()
+    delete historical.runs[0].verification
+    expect(mergeImport(emptyDataset(), JSON.stringify(historical)).data.runs[0]).not.toHaveProperty(
+      'verification'
+    )
+    expect(() =>
+      validateRecord('runs', runFixture({ verification: 'Invalid' as 'Passed' }))
+    ).toThrow('invalid Worker verification')
+  })
   it.each([0, 6, 1.5, 'A', '5'])(
     'rejects a quality grade outside the numeric 1–5 contract: %j',
     (qualityGrade) => {

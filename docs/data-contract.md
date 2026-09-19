@@ -86,6 +86,7 @@ Optional strings: `candidate`, `model`, `modelFamily`, `provider`, `orchestrator
 | `usageReset`                            | Optional boolean; true disables inferred burn across reset/replenishment     |
 | `inputRate`, `cachedRate`, `outputRate` | All three together, or all omitted; USD / million token overrides            |
 | `buildResult`                           | Passed, Failed, Not run                                                      |
+| `verification`                          | Optional explicit worker verification: Passed, Failed, Partial, Not run, Unknown. Omitted historical values remain Unknown; explicit Unknown round-trips. Independent of result, buildResult, runtimeTested, tests, and findings. |
 | `result`                                | Completed, Accepted, Needs repair, Rejected, Blocked, Aborted                |
 
 Nonnegative whole-number fields: `inputTokens`, `cachedInputTokens`, `outputTokens`, `reasoningTokens`, `filesChanged`, `implementationAdded`, `implementationDeleted`, `testAdded`, `testDeleted`, `testsAdded`, `testsPassed`, `testsFailed`, `testsSkipped`, `humanInterventions`, `clarifications`, `autonomousDefects`, `scopeViolations`, `toolIncidents`.

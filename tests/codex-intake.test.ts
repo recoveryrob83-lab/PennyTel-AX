@@ -142,6 +142,8 @@ describe('current Codex 0.155.1 closed-turn adapter', () => {
     expect(matches.authority[receiptId].cardinality).toBe('unique')
     const run = matches.authority[receiptId].first!.run
     expect(run.id).toBe(`codex_${valid.report.receiptId}`)
+    expect(run.verification).toBe('Passed')
+    expect(run.result).toBe('Completed')
     expect(run).toMatchObject({
       inputTokens: 60,
       cachedInputTokens: 40,
@@ -684,6 +686,7 @@ interface AuthorityHarness {
   writes: Mutation[]
   sources: { receiptDirectory: string; rolloutFiles: string[]; sourceRepositoryRoot: string }
   home: string
+  alterData: (update: (data: Dataset) => Dataset) => void
 }
 async function authorityHarness(
   dir: string,
@@ -691,6 +694,7 @@ async function authorityHarness(
     protocol?: ReturnType<typeof installedReporter>
     onPublish?: () => void
     realInventory?: boolean
+    missingSlice?: boolean
   } = {}
 ): Promise<AuthorityHarness> {
   const receiptDirectory = join(dir, '.pennyos', 'runtime', 'receipts')
@@ -700,7 +704,10 @@ async function authorityHarness(
     join(dir, 'pennyos', 'project.json'),
     JSON.stringify({ projectId: 'pennytel', project: 'PennyTel' })
   )
-  await writeFile(join(dir, 'pennyos', 'slices', 'S13.json'), JSON.stringify({ sliceId: 'S13' }))
+  await writeFile(
+    join(dir, 'pennyos', 'slices', 'S13.json'),
+    JSON.stringify({ sliceId: 'S13', title: 'Tracked title' })
+  )
   await writeFile(join(receiptDirectory, `${receiptId}.json`), receipt(receiptId).text)
   const home = join(dir, 'codex')
   await mkdir(join(home, 'sessions'), { recursive: true })
@@ -714,21 +721,31 @@ async function authorityHarness(
       completed(turn)
     ])
   await writeFile(rollout, original)
-  let data: Dataset = { ...emptyDataset(), slices: [{ id: 'S13', title: 'Intake' }] }
+  let data: Dataset = options.missingSlice
+    ? emptyDataset()
+    : { ...emptyDataset(), slices: [{ id: 'S13', title: 'Intake' }] }
   const writes: Mutation[] = []
   const store = {
     load: async () => ({ data: structuredClone(data), path: dir }),
     mutate: async (command: Mutation) => {
       options.onPublish?.()
-      expect(command).toMatchObject({ kind: 'save', table: 'runs', revision: data.revision })
-      if (command.kind !== 'save' || command.table !== 'runs')
-        throw new Error('Unexpected mutation')
+      expect(command).toMatchObject({ kind: 'save', revision: data.revision })
+      if (command.kind !== 'save') throw new Error('Unexpected mutation')
       writes.push(command)
-      data = {
-        ...data,
-        revision: data.revision + 1,
-        runs: [...data.runs, structuredClone(command.record as Run)]
-      }
+      if (command.table === 'slices') {
+        if (data.slices.some((slice) => slice.id === command.record.id)) throw new Error('Conflict')
+        data = {
+          ...data,
+          revision: data.revision + 1,
+          slices: [...data.slices, structuredClone(command.record as Dataset['slices'][number])]
+        }
+      } else if (command.table === 'runs')
+        data = {
+          ...data,
+          revision: data.revision + 1,
+          runs: [...data.runs, structuredClone(command.record as Run)]
+        }
+      else throw new Error('Unexpected table')
       return { data: structuredClone(data), path: dir }
     }
   } as unknown as ProductionStore
@@ -742,12 +759,86 @@ async function authorityHarness(
   )
   const discover = async (id = receiptId): Promise<CodexIntakeCandidate> =>
     (await intake.discover()).find((candidate) => candidate.receiptId === id)!
-  return { intake, discover, original, rollout, closure, receiptDirectory, writes, sources, home }
+  return {
+    intake,
+    discover,
+    original,
+    rollout,
+    closure,
+    receiptDirectory,
+    writes,
+    sources,
+    home,
+    alterData: (update) => {
+      data = update(data)
+    }
+  }
 }
 
 afterEach(() => vi.restoreAllMocks())
 
 describe('S13 sealed authority observation regression matrix', () => {
+  it('offers only tracked Slice semantics, creates once, then requires rediscovery before Run import', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir, { missingSlice: true })
+      const blocked = await h.discover()
+      expect(blocked.status).toBe('blocked')
+      expect(blocked.createSlice?.slice).toEqual({
+        id: 'S13',
+        title: 'Tracked title',
+        project: 'PennyTel'
+      })
+      expect(blocked.token).toBeUndefined()
+      const saved = await h.intake.createSlice(blocked.createSlice!.token)
+      expect(saved.data.slices).toEqual([
+        { id: 'S13', title: 'Tracked title', project: 'PennyTel' }
+      ])
+      expect(saved.data.runs).toHaveLength(0)
+      expect(h.writes).toHaveLength(1)
+      expect(h.writes[0]).toMatchObject({ kind: 'save', table: 'slices', revision: 0 })
+      await expect(h.intake.createSlice(blocked.createSlice!.token)).rejects.toThrow(
+        'Discover and review'
+      )
+      const ready = await h.discover()
+      expect(ready.status).toBe('ready')
+      await h.intake.commit(ready.token!)
+      expect(h.writes).toHaveLength(2)
+      expect(h.writes[1]).toMatchObject({ kind: 'save', table: 'runs', revision: 1 })
+    })
+  })
+  it('blocks stale, conflicting, and invalid tracked Slice proposals', async () => {
+    await inTemp(async (dir) => {
+      const h = await authorityHarness(dir, { missingSlice: true })
+      const first = await h.discover()
+      await writeFile(
+        join(dir, 'pennyos', 'slices', 'S13.json'),
+        JSON.stringify({ sliceId: 'S13', title: 'Changed' })
+      )
+      await expect(h.intake.createSlice(first.createSlice!.token)).rejects.toThrow(
+        'identity changed'
+      )
+      await writeFile(
+        join(dir, 'pennyos', 'slices', 'S13.json'),
+        JSON.stringify({ sliceId: 'S13' })
+      )
+      expect((await h.discover()).createSlice).toBeUndefined()
+      await writeFile(
+        join(dir, 'pennyos', 'slices', 'S13.json'),
+        JSON.stringify({ sliceId: 'S13', title: 'Tracked title' })
+      )
+      const fresh = await h.discover()
+      h.alterData((data) => ({ ...data, revision: data.revision + 1 }))
+      await expect(h.intake.createSlice(fresh.createSlice!.token)).rejects.toThrow(
+        'revision changed'
+      )
+      const conflicting = await h.discover()
+      h.alterData((data) => ({ ...data, slices: [{ id: 'S13', title: 'Existing' }] }))
+      await expect(h.intake.createSlice(conflicting.createSlice!.token)).rejects.toThrow(
+        'already exists'
+      )
+      expect(h.writes).toHaveLength(0)
+    })
+  })
   it.each(['parse', 'verification'])(
     'blocks duplicate growth during %s, consumes token, and publishes nothing',
     async (phase) => {

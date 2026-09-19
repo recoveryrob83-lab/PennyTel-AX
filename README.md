@@ -1,4 +1,4 @@
-# PennyTel 0.2.1
+# PennyTel 0.3.0
 
 PennyTel is a local-first engineering telemetry workbench for comparing real LLM-assisted software work.
 
@@ -14,6 +14,7 @@ PennyTel is designed to be auditable and local-first.
 - No API key is required.
 - No cloud backend is required.
 - Normal telemetry is stored locally in Electron's per-user PennyTel data directory.
+- Canonical JSON artifacts are the source of truth; the main process maintains a rebuildable SQLite projection.
 - Raw Codex logs are not ingested wholesale into the PennyTel dataset; schema-v2 execution evidence stores normalized metrics and provenance only.
 - Missing evidence stays Unknown. Recorded zero stays zero.
 - The Electron renderer remains sandboxed with a narrow typed preload/IPC surface.
@@ -63,7 +64,7 @@ npm run build:win
 The configured installer artifact is named like:
 
 ```text
-pennytel-0.2.1-setup.exe
+pennytel-0.3.0-setup.exe
 ```
 
 Windows code signing is not configured, so self-built or unsigned release binaries may trigger Windows publisher/SmartScreen warnings.
@@ -73,10 +74,10 @@ Linux and macOS packaging scripts also exist in `package.json`; packaged-platfor
 ## First workflow
 
 1. Inspect **Model Registry** for canonical models, provider offers, reasoning levels, benchmarks, and dated pricing.
-2. In **Slice notebook**, create a bounded piece of work.
+2. In **Slice notebook**, create a bounded piece of work, or use **Data & portability → Discover Codex runs** to review a pennyReporter receipt and explicitly create its missing tracked Slice parent.
 3. Add implementation, critic, repair, verification, or support runs. Record only evidence you actually have.
 4. Add findings and discoveries, keeping criticism, repair, and validation links explicit.
-5. Accept a slice when the product outcome is actually accepted; quality remains an operator judgment on a 1–5 scale.
+5. Use **Accept Slice** on the Slice detail when the product outcome is actually accepted; quality remains an operator judgment on a 1–5 scale. The editor supports corrections.
 6. Use **Compare** to inspect run cohorts and full accepted-slice lifecycle economics.
 7. Use **Export dataset** for canonical importable telemetry and **Export comparison** for non-importable derived analysis.
 
@@ -84,11 +85,13 @@ Every record can be edited. Deletion protects referenced slices/runs. Failed sav
 
 ## Schema v2 and execution evidence
 
-PennyTel 0.2.1 uses raw dataset schema v2. Valid schema-v1 datasets remain loadable/importable through deterministic normalization; simply reading an old dataset does not rewrite it.
+PennyTel 0.3.0 uses raw dataset schema v2. Valid schema-v1 datasets remain loadable/importable through deterministic normalization; simply reading an old dataset does not rewrite it.
 
 A run may contain optional structured `executionEvidence` for normalized Codex rollout facts such as source provenance, session/turn identity, runtime version, TTFT, invocation/tool-call counts, paired peak context occupancy, coarse quota-window readings, and execution-environment constraints.
 
 Execution evidence does **not** infer PennyOS workflow semantics such as slice, run type, role, result, or context mode. Those remain explicit operator/orchestrator metadata.
+
+For Codex work, pennyReporter produces a local receipt. **Data & portability** discovers matching closed Codex turns and shows a sanitized proposal. Import is always an explicit operator action. If the Dataset lacks the tracked Slice, **Create Slice** saves only its explicit ID, title, and project; discover again before importing the Run. No separate parser or manual JSON handoff is needed for this workflow. Generic JSON import remains available. `Run.verification` records only explicit worker verification (`Passed`, `Failed`, `Partial`, `Not run`, or `Unknown`); it is independent of result, build checks, and runtime testing. Omitted historical verification remains Unknown.
 
 Quota `usedPercent` evidence is descriptive source evidence and is not converted into legacy remaining-percentage usage burn. Raw prompts, hidden reasoning, source excerpts, tool commands, and full tool output are outside the normal PennyTel dataset contract.
 

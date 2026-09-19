@@ -17,7 +17,9 @@ import {
   type OutcomeFilters,
   type StageScope,
   applyComparisonSelection,
-  compareDataBase
+  compareDataBase,
+  executionEvidenceCoverage,
+  type EvidenceCoverage
 } from '../../../shared/comparison'
 import { burnLabel, displayTimestamp, qualityLabel } from '../../../shared/presentation'
 import {
@@ -53,6 +55,7 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
   const [dateTo, setDateTo] = useState('')
   const [includeUnknownDates, setIncludeUnknownDates] = useState(false)
   const [outcomeFilters, setOutcomeFilters] = useState<OutcomeFilters>({})
+  const [evidenceCoverage, setEvidenceCoverage] = useState<EvidenceCoverage | ''>('')
   const [exportBusy, setExportBusy] = useState(false)
   const [exportError, setExportError] = useState('')
   const [exportMessage, setExportMessage] = useState('')
@@ -104,6 +107,9 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
     discoveries,
     accepted
   } = view
+  const displayedAccepted = accepted.filter(
+    (item) => !evidenceCoverage || executionEvidenceCoverage(item.lifecycle) === evidenceCoverage
+  )
   const exportComparison = async (): Promise<void> => {
     setExportBusy(true)
     setExportError('')
@@ -772,8 +778,21 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
               repair costs.
             </p>
           </div>
+          <label>
+            Execution evidence coverage{' '}
+            <select
+              aria-label="Execution evidence coverage"
+              value={evidenceCoverage}
+              onChange={(event) => setEvidenceCoverage(event.target.value as EvidenceCoverage | '')}
+            >
+              <option value="">All coverage</option>
+              <option>None</option>
+              <option>Partial</option>
+              <option>Complete</option>
+            </select>
+          </label>
         </div>
-        {!accepted.length ? (
+        {!displayedAccepted.length ? (
           <Empty title="No accepted slices in this cohort">
             Set a slice’s disposition, acceptance time, quality grade, and preference when its work
             is accepted.
@@ -795,10 +814,11 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
                   <th>First-pass acceptance</th>
                   <th>Repair burden</th>
                   <th>Runtime QA evidence</th>
+                  <th>Execution evidence coverage</th>
                 </tr>
               </thead>
               <tbody>
-                {accepted.map((economics) => {
+                {displayedAccepted.map((economics) => {
                   const { slice: s, metrics, outcome } = economics
                   return (
                     <tr key={s.id}>
@@ -806,6 +826,7 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
                         <button className="record-link" onClick={() => onOpenSlice(s.id)}>
                           {s.title}
                         </button>
+                        <small>Slice ID: {s.id}</small>
                         <small>
                           {s.productionModel ?? 'Unknown workflow'} · {s.ambiguity ?? 'Unknown'}{' '}
                           ambiguity
@@ -866,6 +887,16 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
                         {counts(metrics.evidence.runtimeTested)}
                         <small>Recorded runtime tested; no separate QA verdict</small>
                       </td>
+                      <td>
+                        {executionEvidenceCoverage(economics.lifecycle)}
+                        <small>
+                          {
+                            economics.lifecycle.filter((run) => run.executionEvidence !== undefined)
+                              .length
+                          }
+                          /{economics.lifecycle.length} relevant runs attached
+                        </small>
+                      </td>
                     </tr>
                   )
                 })}
@@ -874,16 +905,23 @@ export function Compare({ data, onOpenRun, onOpenSlice }: Props): React.JSX.Elem
           </div>
         )}
         <p className="muted">
-          Sample count: {accepted.length} accepted outcomes. Coverage below describes recorded
-          evidence; unrecorded lifecycle work cannot be counted.
+          Showing {displayedAccepted.length} of {accepted.length} accepted outcomes. This row filter
+          does not change comparison calculations or exports. Coverage counts attachments among
+          relevant runs, not completeness of their fields; unrecorded work cannot be counted.
         </p>
-        {accepted.map((economics) => {
+        {displayedAccepted.map((economics) => {
           const { slice, metrics, outcome } = economics
           return (
             <details key={slice.id} className="candidate-evidence">
               <summary>
-                Inspect lifecycle · {slice.title} · {metrics.runCount} runs
+                Inspect lifecycle · {slice.title} · {slice.id} · {metrics.runCount} runs
               </summary>
+              {executionEvidenceCoverage(economics.lifecycle) === 'None' && (
+                <p>
+                  No execution evidence is attached to the relevant runs. Recorded run fields remain
+                  available below; missing values remain Unknown.
+                </p>
+              )}
               <p className="muted">
                 {outcome.evidenceGaps.join(' ') ||
                   'Acceptance, implementation, timestamps, and results are recorded.'}{' '}

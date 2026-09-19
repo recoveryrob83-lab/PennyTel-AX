@@ -93,6 +93,7 @@ export interface Run {
   testsFailed?: number
   testsSkipped?: number
   buildResult?: 'Passed' | 'Failed' | 'Not run'
+  verification?: 'Passed' | 'Failed' | 'Partial' | 'Not run' | 'Unknown'
   runtimeTested?: boolean
   humanInterventions?: number
   clarifications?: number
@@ -216,6 +217,7 @@ export interface CodexIntakeCandidate {
   status: 'ready' | 'blocked' | 'already imported' | 'rejected'
   reason?: string
   token?: string
+  createSlice?: { token: string; slice: Pick<Slice, 'id' | 'title' | 'project'> }
   report?: {
     sliceId: string
     runType: string
@@ -231,6 +233,7 @@ export interface CodexIntakeCandidate {
 }
 export interface PennyTelAPI {
   discoverCodexRuns: () => Promise<CodexIntakeCandidate[]>
+  createCodexSlice: (token: string) => Promise<LoadedData>
   importCodexRun: (token: string) => Promise<LoadedData>
   openBatchImport: () => Promise<BatchPreview | null>
   commitBatchImport: (token: string) => Promise<LoadedData>

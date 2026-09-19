@@ -92,9 +92,12 @@ try {
   assert.match(await mixed.locator('th, td').nth(2).innerText(), /1\.2h.*6\/6 recorded/s)
   assert.match(await mixed.locator('th, td').nth(3).innerText(), /1\.5h.*Recorded timing complete/s)
   assert.match(await mixed.locator('th, td').nth(6).innerText(), /No: 5.*Yes: 1.*6\/6 recorded/s)
-  const summary = page.getByText('Inspect lifecycle · Cross-model accepted repair · 6 runs', {
-    exact: true
-  })
+  const summary = page.getByText(
+    'Inspect lifecycle · Cross-model accepted repair · mixed · 6 runs',
+    {
+      exact: true
+    }
+  )
   await summary.click()
   const detail = page.locator('details').filter({ has: summary })
   const stages = detail.getByRole('table', {
@@ -130,7 +133,7 @@ try {
   await page.getByRole('button', { name: 'Export comparison', exact: true }).click()
   await page.getByRole('status').filter({ hasText: exportPath }).waitFor()
   const analysis = JSON.parse(await readFile(exportPath, 'utf8'))
-  assert.equal(analysis.app.version, '0.2.2')
+  assert.equal(analysis.app.version, '0.3.0')
   assert.deepEqual(analysis.context.filters, { modelConfiguration: astraKey })
   assert.deepEqual(analysis.context.selectedCandidates, [astraKey])
   assert.deepEqual(analysis.context.stageScopes, [{ kind: 'role', value: 'Implementer' }])

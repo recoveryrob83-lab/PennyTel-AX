@@ -21,6 +21,34 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 describe('record editor behavior', () => {
+  it('saves and reopens an explicit worker verification state without changing result', async () => {
+    const data = fixture()
+    const onSave = vi.fn().mockResolvedValue(undefined)
+    const first = render(
+      <RecordEditor
+        target={{ table: 'runs', record: data.runs[0] }}
+        data={data}
+        onSave={onSave}
+        onClose={vi.fn()}
+      />
+    )
+    await userEvent.selectOptions(screen.getByLabelText('Worker verification'), 'Partial')
+    await userEvent.click(screen.getByRole('button', { name: 'Save run' }))
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce())
+    const saved = onSave.mock.calls[0][1]
+    expect(saved.verification).toBe('Partial')
+    expect(saved.result).toBe(data.runs[0].result)
+    first.unmount()
+    render(
+      <RecordEditor
+        target={{ table: 'runs', record: saved }}
+        data={data}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.getByLabelText('Worker verification')).toHaveValue('Partial')
+  })
   it('preserves nested evidence on ordinary edits and validates deliberate corrections without losing failed drafts', async () => {
     const data = fixture()
     data.runs[0].executionEvidence = evidenceFixture()
@@ -254,7 +282,8 @@ describe('record editor behavior', () => {
       exportComparison: vi.fn(),
       runComparisonPlan: vi.fn(),
       discoverCodexRuns: vi.fn(),
-      importCodexRun: vi.fn()
+      importCodexRun: vi.fn(),
+      createCodexSlice: vi.fn()
     }
     render(<App />)
     expect(await screen.findByRole('alert')).toHaveTextContent('Dataset corrupt: preserved')

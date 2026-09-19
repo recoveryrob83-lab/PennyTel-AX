@@ -260,6 +260,13 @@ export const fields: Record<Table, Field[]> = {
       group: 'Implementation & verification'
     },
     {
+      key: 'verification',
+      label: 'Worker verification',
+      options: ['Passed', 'Failed', 'Partial', 'Not run', 'Unknown'],
+      group: 'Implementation & verification',
+      hint: 'Explicit worker verification state; independent of run result, build checks, and runtime testing.'
+    },
+    {
       key: 'runtimeTested',
       label: 'Runtime testing performed',
       type: 'boolean',

@@ -102,7 +102,7 @@ try {
   const bundle = JSON.parse(await readFile(outputPath, 'utf8'))
   assert.equal(bundle.kind, 'pennytel-comparison-plan-results')
   assert.equal(bundle.resultsFormatVersion, 1)
-  assert.equal(bundle.app.version, '0.2.2')
+  assert.equal(bundle.app.version, '0.3.0')
   assert.equal(bundle.source.datasetRevision, authoritative.revision)
   assert.deepEqual(
     bundle.results.map(({ id, name }) => ({ id, name })),

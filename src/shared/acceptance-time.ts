@@ -1,3 +1,11 @@
+import type { Slice } from './types'
+
+export function acceptSliceNow(slice: Slice, now = new Date()): Slice {
+  if ((slice.disposition !== undefined && slice.disposition !== 'In progress') || slice.acceptedAt)
+    throw new Error('This Slice cannot be accepted now. Review its existing acceptance history.')
+  return { ...slice, disposition: 'Accepted', acceptedAt: now.toISOString() }
+}
+
 export function localTimestamp(iso: string): string {
   const date = new Date(iso)
   if (!Number.isFinite(date.getTime())) return ''

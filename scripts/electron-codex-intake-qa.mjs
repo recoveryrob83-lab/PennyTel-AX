@@ -17,7 +17,10 @@ await writeFile(
   join(repo, 'pennyos', 'project.json'),
   JSON.stringify({ projectId: 'pennytel', project: 'PennyTel' })
 )
-await writeFile(join(repo, 'pennyos', 'slices', 'S13.json'), JSON.stringify({ sliceId: 'S13' }))
+await writeFile(
+  join(repo, 'pennyos', 'slices', 'S13.json'),
+  JSON.stringify({ sliceId: 'S13', title: 'Synthetic Codex intake QA' })
+)
 await copyFile(
   resolve(`tests/fixtures/codex-receipts/${fixtureId}.json`),
   join(repo, '.pennyos', 'runtime', 'receipts', `${fixtureId}.json`)
@@ -74,20 +77,22 @@ try {
     { sandbox: true, contextIsolation: true, nodeIntegration: false }
   )
   const bridge = await page.evaluate(() => Object.keys(window.pennytel).sort())
-  assert.ok(bridge.includes('discoverCodexRuns') && bridge.includes('importCodexRun'))
+  assert.ok(
+    bridge.includes('discoverCodexRuns') &&
+      bridge.includes('importCodexRun') &&
+      bridge.includes('createCodexSlice')
+  )
   assert.ok(!bridge.some((name) => /filesystem|readfile|sql|rollout/i.test(name)))
-  await page.evaluate(async () => {
-    const loaded = await window.pennytel.load()
-    await window.pennytel.mutate({
-      kind: 'save',
-      table: 'slices',
-      record: { id: 'S13', title: 'Synthetic Codex intake QA' },
-      revision: loaded.data.revision
-    })
-  })
-  await page.reload()
-  await page.getByRole('heading', { name: 'Slice notebook', exact: true }).waitFor()
   await page.getByRole('navigation').getByRole('button', { name: 'Data & portability' }).click()
+  await page.getByRole('button', { name: 'Discover Codex runs' }).click()
+  await page.getByRole('heading', { name: `${fixtureId} · blocked` }).waitFor()
+  await page.getByRole('button', { name: 'Create Slice' }).click()
+  await page.getByRole('status').filter({ hasText: 'Discover Codex runs again' }).waitFor()
+  const parentOnly = await page.evaluate(async () => (await window.pennytel.load()).data)
+  assert.deepEqual(parentOnly.slices, [
+    { id: 'S13', title: 'Synthetic Codex intake QA', project: 'PennyTel' }
+  ])
+  assert.equal(parentOnly.runs.length, 0)
   await page.getByRole('button', { name: 'Discover Codex runs' }).click()
   await page.getByRole('heading', { name: `${fixtureId} · ready` }).waitFor()
   await page.getByText(/Unknown: executionEvidence\.sourceLog\.contentHash/).waitFor()
@@ -129,17 +134,66 @@ try {
   assert.equal(imported.runs[0].inputTokens, 60)
   assert.equal(imported.runs[0].cachedInputTokens, 40)
   assert.equal(imported.runs[0].reasoningTokens, 4)
+  assert.equal(imported.runs[0].verification, 'Passed')
   assert.equal(imported.runs[0].executionEvidence.turnId, 'turn-1')
   assert.ok(!JSON.stringify(imported).includes('PENNYOS_TURN_REPORT_V1'))
+  await page.getByRole('navigation').getByRole('button', { name: 'Slice notebook' }).click()
+  await page.getByRole('button', { name: /Synthetic Codex intake QA/ }).click()
+  await page.getByRole('button', { name: 'Accept Slice' }).click()
+  const accepted = await page.evaluate(async () => (await window.pennytel.load()).data)
+  assert.equal(accepted.slices[0].disposition, 'Accepted')
+  assert.ok(Number.isFinite(Date.parse(accepted.slices[0].acceptedAt)))
+  await page.evaluate(async () => {
+    let loaded = await window.pennytel.load()
+    loaded = await window.pennytel.mutate({
+      kind: 'save',
+      table: 'slices',
+      record: {
+        id: 'S13-other',
+        title: 'Synthetic Codex intake QA',
+        disposition: 'Accepted',
+        acceptedAt: new Date().toISOString()
+      },
+      revision: loaded.data.revision
+    })
+    await window.pennytel.mutate({
+      kind: 'save',
+      table: 'runs',
+      record: {
+        id: 'legacy-run',
+        sliceId: 'S13-other',
+        runType: 'Implementation',
+        role: 'Implementer',
+        result: 'Completed'
+      },
+      revision: loaded.data.revision
+    })
+  })
+  await page.reload()
+  await page.getByRole('heading', { name: 'Slice notebook', exact: true }).waitFor()
   await application.close()
   page = await launch()
   const restarted = await page.evaluate(async () => (await window.pennytel.load()).data)
-  assert.deepEqual(restarted.runs, imported.runs)
+  assert.deepEqual(
+    restarted.runs.find((run) => run.id === imported.runs[0].id),
+    imported.runs[0]
+  )
+  assert.equal(restarted.slices[0].disposition, 'Accepted')
+  await page.getByRole('navigation').getByRole('button', { name: 'Compare' }).click()
+  const comparison = page.getByRole('region', { name: 'Accepted outcome comparison' })
+  await comparison.getByText('Slice ID: S13', { exact: true }).waitFor()
+  await comparison.getByText('Slice ID: S13-other', { exact: true }).waitFor()
+  await page.getByLabel('Execution evidence coverage').selectOption('None')
+  await comparison.getByText('Slice ID: S13-other', { exact: true }).waitFor()
+  assert.equal(await comparison.getByText('Slice ID: S13', { exact: true }).count(), 0)
+  await page.getByLabel('Execution evidence coverage').selectOption('Complete')
+  await comparison.getByText('Slice ID: S13', { exact: true }).waitFor()
+  assert.equal(await comparison.getByText('Slice ID: S13-other', { exact: true }).count(), 0)
   await page.getByRole('navigation').getByRole('button', { name: 'Data & portability' }).click()
   await page.getByRole('button', { name: 'Discover Codex runs' }).click()
   await page.getByRole('heading', { name: `${fixtureId} · already imported` }).waitFor()
   console.log(
-    'Electron Codex intake QA passed: discover, review, duplicate rejection, safe resume, import, restart, idempotency'
+    'Electron Codex intake QA passed: explicit parent creation, rediscovery, review, duplicate rejection, safe resume, verification import, acceptance, restart, Compare coverage, idempotency'
   )
 } finally {
   if (application) await application.close()

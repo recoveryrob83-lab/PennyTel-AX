@@ -6,7 +6,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
 import type { CodexExecutionEvidence } from '../shared/execution-evidence'
-import type { CodexIntakeCandidate, Dataset, Run } from '../shared/types'
+import type { CodexIntakeCandidate, Dataset, Run, Slice } from '../shared/types'
 import { validateRecord } from '../shared/data'
 import type { ProductionStore } from './production-store'
 
@@ -42,6 +42,7 @@ export interface Receipt {
   text: string
   report: Report
   digest: string
+  sliceProposal?: Pick<Slice, 'id' | 'title' | 'project'>
 }
 interface Usage {
   input_tokens: number
@@ -451,6 +452,7 @@ function derive(
     runType: report.runType,
     role: report.role,
     result: report.result,
+    verification: report.verification as Run['verification'],
     executionEvidence: evidence
   }
   if (report.candidate) run.candidate = report.candidate
@@ -844,6 +846,15 @@ export async function scanFile(
 
 export class CodexIntake {
   private previews = new Map<string, Preview>()
+  private slicePreviews = new Map<
+    string,
+    {
+      receiptId: string
+      digest: string
+      revision: number
+      slice: Pick<Slice, 'id' | 'title' | 'project'>
+    }
+  >()
   constructor(
     private readonly repo: string,
     private readonly store: ProductionStore,
@@ -894,12 +905,28 @@ export class CodexIntake {
         if (report.projectId !== project.projectId || report.project !== project.project)
           throw new Error('Receipt belongs to another project.')
         const slice = join(root, 'pennyos', 'slices', `${report.sliceId}.json`)
-        if (
-          !/^[A-Za-z0-9_-]{1,100}$/.test(report.sliceId) ||
-          JSON.parse((await fixedFile(slice, 4096)).toString('utf8')).sliceId !== report.sliceId
-        )
+        if (!/^[A-Za-z0-9_-]{1,100}$/.test(report.sliceId))
           throw new Error('Receipt slice identity is absent from this repository.')
-        valid.push({ path, text, report, digest: createHash('sha256').update(text).digest('hex') })
+        const tracked = JSON.parse((await fixedFile(slice, 4096)).toString('utf8'))
+        if (!object(tracked) || tracked.sliceId !== report.sliceId)
+          throw new Error('Receipt slice identity is absent from this repository.')
+        let sliceProposal: Receipt['sliceProposal']
+        if (typeof tracked.title === 'string' && typeof project.project === 'string') {
+          const proposed = { id: report.sliceId, title: tracked.title, project: project.project }
+          try {
+            validateRecord('slices', proposed)
+            sliceProposal = proposed
+          } catch {
+            // The receipt remains valid, but creation needs explicit valid identity.
+          }
+        }
+        valid.push({
+          path,
+          text,
+          report,
+          digest: createHash('sha256').update(text).digest('hex'),
+          sliceProposal
+        })
       } catch (error) {
         rejected.push({
           receiptId: id.slice(0, 100),
@@ -998,6 +1025,7 @@ export class CodexIntake {
 
   async discover(): Promise<CodexIntakeCandidate[]> {
     this.previews.clear()
+    this.slicePreviews.clear()
     const { data } = await this.store.load()
     const { valid, rejected } = await this.receipts()
     const observation = await this.capture(valid)
@@ -1016,15 +1044,29 @@ export class CodexIntake {
         }
         const base = { receiptId: report.receiptId, report: metadata }
         const decision = eligibility(observation, receipt, data)
-        if (decision.status !== 'ready' || !decision.match)
+        if (decision.status !== 'ready' || !decision.match) {
+          const missingParent =
+            decision.match && !data.slices.some((slice) => slice.id === report.sliceId)
+          const createToken = missingParent && receipt.sliceProposal ? randomUUID() : undefined
+          if (createToken)
+            this.slicePreviews.set(createToken, {
+              receiptId: report.receiptId,
+              digest: receipt.digest,
+              revision: data.revision,
+              slice: receipt.sliceProposal!
+            })
           return {
             ...base,
             status: decision.status,
             reason: decision.reason,
+            ...(createToken
+              ? { createSlice: { token: createToken, slice: receipt.sliceProposal! } }
+              : {}),
             ...(decision.match
               ? { run: decision.match.run, warnings: decision.match.warnings }
               : {})
           }
+        }
         const match = decision.match
         const token = randomUUID()
         this.previews.set(token, { observation, match, revision: data.revision })
@@ -1068,6 +1110,31 @@ export class CodexIntake {
         return { ...base, status: 'ready', token, run, unknowns, warnings: match.warnings }
       })
     ]
+  }
+
+  async createSlice(token: string): Promise<Awaited<ReturnType<ProductionStore['mutate']>>> {
+    const selected = this.slicePreviews.get(token)
+    this.slicePreviews.delete(token)
+    if (!selected) throw new Error('Discover and review this Codex candidate again.')
+    const { data } = await this.store.load()
+    if (data.revision !== selected.revision)
+      throw new Error('Dataset revision changed; rediscover before creating the Slice.')
+    if (data.slices.some((slice) => slice.id === selected.slice.id))
+      throw new Error('Dataset Slice already exists; creation refused.')
+    const { valid } = await this.receipts()
+    const fresh = valid.find((receipt) => receipt.report.receiptId === selected.receiptId)
+    if (
+      !fresh ||
+      fresh.digest !== selected.digest ||
+      JSON.stringify(fresh.sliceProposal) !== JSON.stringify(selected.slice)
+    )
+      throw new Error('Tracked Slice identity changed; rediscover before creating the Slice.')
+    return this.store.mutate({
+      kind: 'save',
+      table: 'slices',
+      record: selected.slice,
+      revision: selected.revision
+    })
   }
 
   async commit(token: string): Promise<Awaited<ReturnType<ProductionStore['mutate']>>> {

@@ -4,6 +4,7 @@ import { validateRecord } from '../../../shared/data'
 import type { Dataset, Entity, Table } from '../../../shared/types'
 import { Modal } from './ui'
 import { AcceptanceTime } from './AcceptanceTime'
+import { acceptSliceNow } from '../../../shared/acceptance-time'
 
 export interface EditTarget {
   table: Table
@@ -93,10 +94,19 @@ export function RecordEditor({
           key={field.key}
           value={String(value ?? '')}
           onChange={(raw) => update(field, raw)}
-          canAcceptNow={values.disposition === 'In progress'}
+          canAcceptNow={values.disposition === undefined || values.disposition === 'In progress'}
           onAcceptNow={(iso) => {
-            if (values.acceptedAt || values.disposition !== 'In progress') return
-            setValues({ ...values, disposition: 'Accepted', acceptedAt: iso })
+            if (
+              values.acceptedAt ||
+              (values.disposition !== undefined && values.disposition !== 'In progress')
+            )
+              return
+            setValues({
+              ...acceptSliceNow(
+                values as unknown as import('../../../shared/types').Slice,
+                new Date(iso)
+              )
+            })
             setDiscard(false)
             setError('')
           }}

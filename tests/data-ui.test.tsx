@@ -6,6 +6,40 @@ import '@testing-library/jest-dom/vitest'
 import { Data } from '../src/renderer/src/pages/Data'
 import { emptyDataset, type CodexIntakeCandidate, type PennyTelAPI } from '../src/shared/types'
 afterEach(cleanup)
+it('creates a reviewed tracked parent explicitly without importing a Run', async () => {
+  const candidate: CodexIntakeCandidate = {
+    receiptId: 'pr1_parent',
+    status: 'blocked',
+    reason: 'Create or import the matching Dataset Slice first.',
+    createSlice: {
+      token: 'slice-token',
+      slice: { id: 'S14', title: 'Tracked title', project: 'PennyTel' }
+    }
+  }
+  const discoverCodexRuns = vi.fn().mockResolvedValue([candidate])
+  const createCodexSlice = vi.fn().mockResolvedValue({
+    data: { ...emptyDataset(), revision: 1, slices: [candidate.createSlice!.slice] },
+    path: 'QA'
+  })
+  const importCodexRun = vi.fn()
+  window.pennytel = {
+    discoverCodexRuns,
+    createCodexSlice,
+    importCodexRun
+  } as unknown as PennyTelAPI
+  const onBatchImported = vi.fn()
+  render(
+    <Data data={emptyDataset()} path="QA" onImport={vi.fn()} onBatchImported={onBatchImported} />
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Discover Codex runs' }))
+  expect(screen.getByText(/Tracked Slice: S14/)).toHaveTextContent('Tracked title · PennyTel')
+  expect(createCodexSlice).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('button', { name: 'Create Slice' }))
+  expect(createCodexSlice).toHaveBeenCalledWith('slice-token')
+  expect(onBatchImported).toHaveBeenCalledOnce()
+  expect(importCodexRun).not.toHaveBeenCalled()
+  expect(screen.getByRole('status')).toHaveTextContent('Discover Codex runs again')
+})
 it('shows sanitized Codex review and imports only after the operator clicks', async () => {
   const candidate: CodexIntakeCandidate = {
     receiptId: 'pr1_test',

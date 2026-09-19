@@ -21,7 +21,7 @@ uses those semantics to pair the durable receipt and final terminal block with
 independently sourced Codex rollout evidence before sanitized operator review and
 canonical PennyTel import.
 
-## Codex intake (S13)
+## Codex intake (S13–S14)
 
 Data & portability can discover project-local receipts and matching closed Codex
 turns. Start PennyTel from the project checkout, or set `PENNYTEL_REPO_DIR` to
@@ -39,6 +39,8 @@ its explicit `task_complete`. Only normalized Run and execution evidence reach
 the renderer; no rollout content is persisted. Import consumes a preview token,
 rechecks the receipt, rollout closure and Dataset revision, and uses the ordinary
 Run save mutation.
+
+If a validated receipt references a tracked repository Slice absent from the Dataset, review offers **Create Slice** only when the tracked slice file explicitly has a valid title. The new record contains only the exact tracked ID and title plus the project from `pennyos/project.json`. Creation is an explicit revision-checked Slice save; it never imports a Run. Discover again, review, and explicitly import the Run. Invalid or missing title keeps the Run blocked for manual Slice creation. The normal Codex path needs no separate parser or support JSON. Generic JSON and batch import stay available for other normalized sources. Only validated Reporter verification is copied into `Run.verification`; PennyTel does not infer it from rollout events.
 
 The deterministic fixture and Electron smoke cover Codex CLI `0.155.1`'s
 observed JSONL event shape. Unknown future authority fields or turn/usage

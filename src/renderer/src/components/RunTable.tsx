@@ -26,6 +26,7 @@ export function RunTable({
             <th>API-equivalent</th>
             <th>Wall clock</th>
             <th>Result</th>
+            <th>Verification</th>
           </tr>
         </thead>
         <tbody>
@@ -48,6 +49,9 @@ export function RunTable({
               <td className="numeric">{duration(runMinutes(run))}</td>
               <td>
                 <Badge>{run.result}</Badge>
+              </td>
+              <td>
+                <Badge>{run.verification}</Badge>
               </td>
             </tr>
           ))}

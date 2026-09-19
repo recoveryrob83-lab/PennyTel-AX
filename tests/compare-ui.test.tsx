@@ -11,6 +11,7 @@ import App from '../src/renderer/src/App'
 import { version } from '../package.json'
 import acceptedFixture from './accepted-outcome-fixture.json'
 import { validateDataset } from '../src/shared/data'
+import { executionEvidenceCoverage } from '../src/shared/comparison'
 import {
   compareData,
   MAX_COMPARISON_CANDIDATES,
@@ -19,6 +20,35 @@ import {
 
 afterEach(cleanup)
 describe('comparison UI uses shared cohort context', () => {
+  it('shows stable IDs and None, Partial, Complete attachment coverage with a row-only filter', async () => {
+    const data: unknown = structuredClone(acceptedFixture)
+    validateDataset(data)
+    data.slices[1].title = data.slices[0].title
+    data.runs.find((run) => run.sliceId === 'mixed')!.executionEvidence = {
+      kind: 'codex-rollout',
+      formatVersion: 1
+    }
+    for (const run of data.runs.filter((run) => run.sliceId === 'one-shot'))
+      run.executionEvidence = { kind: 'codex-rollout', formatVersion: 1 }
+    const onOpenSlice = vi.fn()
+    render(<Compare data={data} onOpenRun={vi.fn()} onOpenSlice={onOpenSlice} />)
+    const region = within(screen.getByRole('region', { name: 'Accepted outcome comparison' }))
+    expect(region.getAllByText('Slice ID: mixed')).toHaveLength(1)
+    expect(region.getAllByText('Slice ID: one-shot')).toHaveLength(1)
+    expect(executionEvidenceCoverage(data.runs.filter((run) => run.sliceId === 'mixed'))).toBe(
+      'Partial'
+    )
+    expect(executionEvidenceCoverage(data.runs.filter((run) => run.sliceId === 'one-shot'))).toBe(
+      'Complete'
+    )
+    expect(executionEvidenceCoverage([])).toBe('None')
+    await userEvent.selectOptions(screen.getByLabelText('Execution evidence coverage'), 'None')
+    expect(region.queryByText('Slice ID: mixed')).toBeNull()
+    expect(region.getByText('Slice ID: empty')).toBeVisible()
+    expect(
+      screen.getByText(/row filter does not change comparison calculations or exports/)
+    ).toBeVisible()
+  })
   it('shows outcome samples, cross-model lifecycle stages, token coverage and opens downstream source runs', async () => {
     const data: unknown = structuredClone(acceptedFixture)
     validateDataset(data)
@@ -38,7 +68,9 @@ describe('comparison UI uses shared cohort context', () => {
     expect(mixed).toHaveTextContent('1.5hFirst recorded start to acceptance')
     expect(mixed).toHaveTextContent('1 recorded repair runs')
     expect(mixed).toHaveTextContent('No: 5 · Yes: 1')
-    const summary = screen.getByText('Inspect lifecycle · Cross-model accepted repair · 6 runs')
+    const summary = screen.getByText(
+      /Inspect lifecycle · Cross-model accepted repair · .* · 6 runs/
+    )
     await user.click(summary)
     const detail = within(summary.closest('details')!)
     const stages = within(
@@ -73,7 +105,7 @@ describe('comparison UI uses shared cohort context', () => {
       'Unknown0/0 recorded · incomplete'
     )
     expect(cells('Recorded zero-cost acceptance')[1]).toHaveTextContent('$0.001/1 recorded')
-    expect(screen.getByText(/Sample count: 5 accepted outcomes/)).toBeVisible()
+    expect(screen.getByText(/Showing 5 of 5 accepted outcomes/)).toBeVisible()
   })
   it('selects 2 then 3+ configurations, scopes evidence, retains empty candidates and exports the shared workspace', async () => {
     const user = userEvent.setup()
@@ -239,7 +271,8 @@ describe('comparison UI uses shared cohort context', () => {
       exportComparison,
       runComparisonPlan: vi.fn(),
       discoverCodexRuns: vi.fn(),
-      importCodexRun: vi.fn()
+      importCodexRun: vi.fn(),
+      createCodexSlice: vi.fn()
     }
     render(<Compare data={data} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
     expect(screen.getByLabelText('Group runs by')).toHaveValue('modelConfiguration')
@@ -278,7 +311,7 @@ describe('comparison UI uses shared cohort context', () => {
   })
 
   it('keeps the canonical package version visible across ordinary pages', async () => {
-    expect(version).toBe('0.2.2')
+    expect(version).toBe('0.3.0')
     const user = userEvent.setup()
     window.pennytel = {
       load: vi.fn().mockResolvedValue({ data: configurationFixture(), path: '/qa/telemetry.json' }),
@@ -291,7 +324,8 @@ describe('comparison UI uses shared cohort context', () => {
       exportComparison: vi.fn(),
       runComparisonPlan: vi.fn(),
       discoverCodexRuns: vi.fn(),
-      importCodexRun: vi.fn()
+      importCodexRun: vi.fn(),
+      createCodexSlice: vi.fn()
     }
     render(<App />)
     const nav = await screen.findByRole('navigation')
@@ -314,7 +348,8 @@ describe('comparison UI uses shared cohort context', () => {
       exportComparison,
       runComparisonPlan: vi.fn(),
       discoverCodexRuns: vi.fn(),
-      importCodexRun: vi.fn()
+      importCodexRun: vi.fn(),
+      createCodexSlice: vi.fn()
     }
     render(<Compare data={comparisonFixture()} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
     const accepted = within(
@@ -359,7 +394,8 @@ describe('comparison UI uses shared cohort context', () => {
       exportComparison: vi.fn().mockRejectedValue(new Error('Could not save analysis')),
       runComparisonPlan: vi.fn(),
       discoverCodexRuns: vi.fn(),
-      importCodexRun: vi.fn()
+      importCodexRun: vi.fn(),
+      createCodexSlice: vi.fn()
     }
     render(<Compare data={comparisonFixture()} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
     await user.click(screen.getByRole('button', { name: 'Export comparison' }))
@@ -381,7 +417,8 @@ describe('comparison UI uses shared cohort context', () => {
       exportComparison: vi.fn(),
       runComparisonPlan,
       discoverCodexRuns: vi.fn(),
-      importCodexRun: vi.fn()
+      importCodexRun: vi.fn(),
+      createCodexSlice: vi.fn()
     }
     render(<Compare data={comparisonFixture()} onOpenRun={vi.fn()} onOpenSlice={vi.fn()} />)
     await user.click(screen.getByText('Narrow the cohort'))

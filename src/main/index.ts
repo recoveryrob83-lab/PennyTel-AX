@@ -63,6 +63,10 @@ else {
     }
     let batch: { token: string; sources: ImportSource[]; revision: number } | undefined
     handle('telemetry:discover-codex', () => codexIntake.discover())
+    handle('telemetry:create-codex-slice', (token) => {
+      if (typeof token !== 'string') throw new Error('Invalid Codex Slice token.')
+      return codexIntake.createSlice(token)
+    })
     handle('telemetry:import-codex', (token) => {
       if (typeof token !== 'string') throw new Error('Invalid Codex import token.')
       return codexIntake.commit(token)

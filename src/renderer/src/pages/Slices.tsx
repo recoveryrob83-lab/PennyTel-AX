@@ -12,6 +12,7 @@ import {
 } from '../../../shared/metrics'
 import { Badge, Empty, Metric, RecordDetails } from '../components/ui'
 import { RunTable } from '../components/RunTable'
+import { acceptSliceNow } from '../../../shared/acceptance-time'
 
 interface Props {
   data: Dataset
@@ -20,6 +21,7 @@ interface Props {
   onEdit: (table: Table, record?: Entity, sliceId?: string) => void
   onOpenRun: (run: Run) => void
   onDelete: (table: Table, record: Entity) => void
+  onSave: (table: Table, record: Entity) => Promise<void>
 }
 export function Slices({
   data,
@@ -27,7 +29,8 @@ export function Slices({
   onSelect,
   onEdit,
   onOpenRun,
-  onDelete
+  onDelete,
+  onSave
 }: Props): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [disposition, setDisposition] = useState('')
@@ -43,7 +46,9 @@ export function Slices({
     .slice()
     .reverse()
   if (slice)
-    return <SliceDetail slice={slice} {...{ data, onSelect, onEdit, onOpenRun, onDelete }} />
+    return (
+      <SliceDetail slice={slice} {...{ data, onSelect, onEdit, onOpenRun, onDelete, onSave }} />
+    )
   return (
     <>
       <div className="page-heading">
@@ -146,9 +151,12 @@ function SliceDetail({
   onSelect,
   onEdit,
   onOpenRun,
-  onDelete
+  onDelete,
+  onSave
 }: Omit<Props, 'selectedId'> & { slice: Slice }): React.JSX.Element {
   const [tab, setTab] = useState<'runs' | 'findings' | 'discoveries' | 'details'>('runs')
+  const [acceptBusy, setAcceptBusy] = useState(false)
+  const [acceptError, setAcceptError] = useState('')
   const runs = data.runs
     .filter((r) => r.sliceId === slice.id)
     .sort((a, b) => (a.startAt ?? '').localeCompare(b.startAt ?? ''))
@@ -183,8 +191,35 @@ function SliceDetail({
             )}
           </div>
         </div>
-        <button onClick={() => onEdit('slices', slice)}>Edit slice</button>
+        <div className="button-row">
+          {(slice.disposition === undefined || slice.disposition === 'In progress') &&
+            !slice.acceptedAt && (
+              <button
+                className="primary"
+                disabled={acceptBusy}
+                onClick={async () => {
+                  setAcceptBusy(true)
+                  setAcceptError('')
+                  try {
+                    await onSave('slices', acceptSliceNow(slice))
+                  } catch (error) {
+                    setAcceptError((error as Error).message)
+                  } finally {
+                    setAcceptBusy(false)
+                  }
+                }}
+              >
+                Accept Slice
+              </button>
+            )}
+          <button onClick={() => onEdit('slices', slice)}>Edit slice</button>
+        </div>
       </div>
+      {acceptError && (
+        <p className="error" role="alert">
+          {acceptError}
+        </p>
+      )}
       <div className="metrics">
         <Metric
           label={accepted ? 'Cost to accepted' : 'Known cost so far'}

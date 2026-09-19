@@ -275,6 +275,31 @@ export function Data({
                   </p>
                 )}
                 {item.reason && <p role="alert">{item.reason}</p>}
+                {item.createSlice && (
+                  <div>
+                    <p>
+                      Tracked Slice: {item.createSlice.slice.id} · {item.createSlice.slice.title} ·{' '}
+                      {item.createSlice.slice.project}
+                    </p>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          const result = await window.pennytel.createCodexSlice(
+                            item.createSlice!.token
+                          )
+                          onBatchImported(result)
+                          setCodexCandidates(undefined)
+                          setMessage(
+                            `Slice ${item.createSlice!.slice.id} created. Discover Codex runs again to review the Run.`
+                          )
+                        })
+                      }
+                    >
+                      Create Slice
+                    </button>
+                  </div>
+                )}
                 {item.warnings?.map((warning) => (
                   <p key={warning}>{warning}</p>
                 ))}
